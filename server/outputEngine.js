@@ -1,6 +1,7 @@
 const e131 = require('e131');
 const dgram = require('dgram');
 const os = require('os');
+const crypto = require('crypto');
 const config = require('./config');
 const dmxEngine = require('./dmxEngine');
 
@@ -17,11 +18,20 @@ function getDefaultMulticastInterface() {
   return null;
 }
 
+// Generate a random UUID as a 16-byte buffer for sACN CID
+function generateCID() {
+  return crypto.randomBytes(16);
+}
+
 class OutputEngine {
   constructor() {
     this.clients = {};
+    this.packets = {};  // Store packets for reuse (sequence number tracking)
     this.interval = null;
     this.running = false;
+    // Generate a persistent CID for this instance
+    this.cid = generateCID();
+    console.log(`sACN CID generated: ${this.cid.toString('hex').toUpperCase().replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5')}`);
   }
 
   start() {
@@ -68,6 +78,7 @@ class OutputEngine {
     });
 
     this.clients = {};
+    this.packets = {};  // Clear cached packets
     this.running = false;
     console.log('Output engine stopped');
   }
@@ -90,6 +101,12 @@ class OutputEngine {
     Object.keys(universes).forEach(universeNum => {
       const universeInt = parseInt(universeNum);
       const dmxData = universes[universeNum];
+
+      // Validate universe range (sACN requires 1-63999)
+      if (universeInt < 1 || universeInt > 63999) {
+        console.error(`sACN: Invalid universe ${universeInt} (must be 1-63999), skipping`);
+        return;
+      }
 
       if (sacnCfg.multicast) {
         // Multicast mode: one client per universe
@@ -119,16 +136,28 @@ class OutputEngine {
         }
 
         const client = this.clients[clientKey];
-        const packet = client.createPacket(512);
+        
+        // Reuse packet for proper sequence number tracking
+        if (!this.packets[clientKey]) {
+          const packet = client.createPacket(512);
+          packet.setCID(this.cid);
+          packet.setSourceName('NMS DMX Control');
+          packet.setUniverse(universeInt);
+          this.packets[clientKey] = packet;
+        }
+        
+        const packet = this.packets[clientKey];
         const slotsData = packet.getSlotsData();
 
         for (let i = 0; i < 512; i++) {
           slotsData[i] = dmxData[i];
         }
 
-        packet.setSourceName('NMS DMX Control');
-        packet.setPriority(sacnCfg.priority || 100);
-        packet.setUniverse(universeInt);
+        const priority = sacnCfg.priority !== undefined ? sacnCfg.priority : 100;
+        packet.setPriority(priority);
+        
+        // Increment sequence number for each frame
+        packet.incrementSequenceNumber();
 
         // Log non-zero channels for debugging
         const nonZeroChannels = [];
@@ -140,7 +169,7 @@ class OutputEngine {
 
         if (nonZeroChannels.length > 0) {
           const multicastAddr = `239.255.${Math.floor(universeInt / 256)}.${universeInt % 256}`;
-          console.log(`[sACN TX] → ${multicastAddr}:5568 | Universe:${universeInt} Priority:${sacnCfg.priority || 100} | ${nonZeroChannels.join(', ')}`);
+          console.log(`[sACN TX] → ${multicastAddr}:5568 | Universe:${universeInt} Priority:${priority} | ${nonZeroChannels.join(', ')}`);
         }
 
         client.send(packet, (err) => {
@@ -164,16 +193,28 @@ class OutputEngine {
           }
 
           const client = this.clients[clientKey];
-          const packet = client.createPacket(512);
+          
+          // Reuse packet for proper sequence number tracking
+          if (!this.packets[clientKey]) {
+            const packet = client.createPacket(512);
+            packet.setCID(this.cid);
+            packet.setSourceName('NMS DMX Control');
+            packet.setUniverse(universeInt);
+            this.packets[clientKey] = packet;
+          }
+          
+          const packet = this.packets[clientKey];
           const slotsData = packet.getSlotsData();
 
           for (let i = 0; i < 512; i++) {
             slotsData[i] = dmxData[i];
           }
 
-          packet.setSourceName('NMS DMX Control');
-          packet.setPriority(sacnCfg.priority || 100);
-          packet.setUniverse(universeInt);
+          const priority = sacnCfg.priority !== undefined ? sacnCfg.priority : 100;
+          packet.setPriority(priority);
+          
+          // Increment sequence number for each frame
+          packet.incrementSequenceNumber();
 
           // Log non-zero channels for debugging
           const nonZeroChannels = [];
@@ -184,7 +225,7 @@ class OutputEngine {
           }
 
           if (nonZeroChannels.length > 0) {
-            console.log(`[sACN TX] → ${dest}:5568 | Universe:${universeInt} Priority:${sacnCfg.priority || 100} | ${nonZeroChannels.join(', ')}`);
+            console.log(`[sACN TX] → ${dest}:5568 | Universe:${universeInt} Priority:${priority} | ${nonZeroChannels.join(', ')}`);
           }
 
           client.send(packet, (err) => {
