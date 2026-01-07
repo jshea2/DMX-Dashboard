@@ -18,8 +18,9 @@ const TABS = [
   { id: 'profiles', label: 'Fixture Profiles' },
   { id: 'patching', label: 'Patching' },
   { id: 'looks', label: 'Looks' },
+  { id: 'showlayout', label: 'Show Layout Editor' },
   { id: 'cuelist', label: 'Cue List' },
-  { id: 'dmxoutput', label: 'DMX Output' },
+  { id: 'dmxoutput', label: 'DMX Viewer' },
 ];
 
 const SettingsPage = () => {
@@ -32,6 +33,7 @@ const SettingsPage = () => {
   const [collapsedSections, setCollapsedSections] = useState({});
   const [collapsedProfiles, setCollapsedProfiles] = useState({});
   const [collapsedFixtures, setCollapsedFixtures] = useState({});
+  const [collapsedLayouts, setCollapsedLayouts] = useState({});
   const [patchViewerUniverse, setPatchViewerUniverse] = useState(1);
   const [draggingFixture, setDraggingFixture] = useState(null);
 
@@ -325,6 +327,344 @@ const SettingsPage = () => {
     setConfig(newConfig);
   };
 
+  // === SHOW LAYOUT FUNCTIONS ===
+  const generateUrlSlug = (name, existingSlugs = []) => {
+    const baseSlug = name
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '-')
+      .replace(/-+/g, '-')
+      .substring(0, 50);
+
+    const reservedSlugs = ['home', 'settings', 'dmx-output'];
+    let slug = baseSlug;
+    let counter = 2;
+
+    while (reservedSlugs.includes(slug) || existingSlugs.includes(slug)) {
+      slug = `${baseSlug}-${counter}`;
+      counter++;
+    }
+
+    return slug;
+  };
+
+  const addShowLayout = () => {
+    const newConfig = { ...config };
+    if (!newConfig.showLayouts) newConfig.showLayouts = [];
+
+    const existingSlugs = newConfig.showLayouts.map(l => l.urlSlug);
+    const newId = `layout-${Date.now()}`;
+    const name = 'New Layout';
+    const urlSlug = generateUrlSlug(name, existingSlugs);
+
+    const newLayout = {
+      id: newId,
+      name: name,
+      urlSlug: urlSlug,
+      isHome: newConfig.showLayouts.length === 0, // First layout is home
+      showName: true,
+      backgroundColor: '#1a1a2e',
+      logo: null,
+      title: 'Lighting',
+      showBlackoutButton: true,
+      items: []
+    };
+
+    // Add all looks
+    newConfig.looks.forEach((look, index) => {
+      newLayout.items.push({
+        type: 'look',
+        id: look.id,
+        visible: true,
+        order: index
+      });
+    });
+
+    // Add all fixtures
+    const lookCount = newConfig.looks.length;
+    newConfig.fixtures.forEach((fixture, index) => {
+      newLayout.items.push({
+        type: 'fixture',
+        id: fixture.id,
+        visible: true,
+        order: lookCount + index
+      });
+    });
+
+    newConfig.showLayouts.push(newLayout);
+    setConfig(newConfig);
+  };
+
+  const removeShowLayout = (index) => {
+    const newConfig = { ...config };
+    const layout = newConfig.showLayouts[index];
+
+    // Prevent deleting home layout
+    if (layout.isHome && newConfig.showLayouts.length > 1) {
+      alert('Cannot delete the home layout. Please set another layout as home first.');
+      return;
+    }
+
+    newConfig.showLayouts.splice(index, 1);
+
+    // If this was the last layout and we deleted it, that's ok
+    // The migration will create a default one next time
+
+    setConfig(newConfig);
+  };
+
+  const duplicateShowLayout = (index) => {
+    const newConfig = { ...config };
+    const original = newConfig.showLayouts[index];
+    const existingSlugs = newConfig.showLayouts.map(l => l.urlSlug);
+
+    const duplicate = {
+      ...original,
+      id: `layout-${Date.now()}`,
+      name: `${original.name} (Copy)`,
+      urlSlug: generateUrlSlug(`${original.name} Copy`, existingSlugs),
+      isHome: false, // Duplicates are never home
+      items: original.items.map(item => ({ ...item }))
+    };
+
+    newConfig.showLayouts.splice(index + 1, 0, duplicate);
+    setConfig(newConfig);
+  };
+
+  const updateShowLayout = (index, field, value) => {
+    const newConfig = { ...config };
+
+    // If updating name, regenerate URL slug
+    if (field === 'name') {
+      const existingSlugs = newConfig.showLayouts
+        .filter((_, i) => i !== index)
+        .map(l => l.urlSlug);
+      newConfig.showLayouts[index].urlSlug = generateUrlSlug(value, existingSlugs);
+    }
+
+    newConfig.showLayouts[index][field] = value;
+    setConfig(newConfig);
+  };
+
+  const setHomeLayout = (layoutId) => {
+    const newConfig = { ...config };
+    // Set all to false, then set the selected one to true
+    newConfig.showLayouts.forEach(layout => {
+      layout.isHome = layout.id === layoutId;
+    });
+    setConfig(newConfig);
+  };
+
+  const handleLogoUpload = (layoutIndex, event) => {
+    const file = event.target.files[0];
+    if (file && file.type.startsWith('image/')) {
+      // Check file size (max 500KB recommended)
+      if (file.size > 500 * 1024) {
+        alert('Logo file is too large. Please use an image smaller than 500KB.');
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        updateShowLayout(layoutIndex, 'logo', e.target.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const updateLayoutItem = (layoutIndex, itemId, field, value) => {
+    const newConfig = { ...config };
+    const item = newConfig.showLayouts[layoutIndex].items.find(i => i.id === itemId);
+    if (item) {
+      item[field] = value;
+      setConfig(newConfig);
+    }
+  };
+
+  const toggleAllLayoutItems = (layoutIndex, itemType, visible) => {
+    const newConfig = { ...config };
+    newConfig.showLayouts[layoutIndex].items
+      .filter(item => item.type === itemType)
+      .forEach(item => item.visible = visible);
+    setConfig(newConfig);
+  };
+
+  const handleLayoutItemDragStart = (e, layoutIndex, itemIndex) => {
+    setDraggedItem({ type: 'layoutItem', layoutIndex, itemIndex });
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleLayoutItemDragOver = (e, layoutIndex, itemIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'layoutItem' &&
+        draggedItem.layoutIndex === layoutIndex &&
+        draggedItem.itemIndex !== itemIndex) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleLayoutItemDrop = (e, layoutIndex, targetIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'layoutItem' &&
+        draggedItem.layoutIndex === layoutIndex &&
+        draggedItem.itemIndex !== targetIndex) {
+      const newConfig = { ...config };
+      const items = newConfig.showLayouts[layoutIndex].items;
+      const [removed] = items.splice(draggedItem.itemIndex, 1);
+      items.splice(targetIndex, 0, removed);
+      // Recalculate order values
+      items.forEach((item, idx) => {
+        item.order = idx;
+      });
+      setConfig(newConfig);
+    }
+    setDraggedItem(null);
+  };
+
+  // === SECTION MANAGEMENT FUNCTIONS ===
+  const addSection = (layoutIndex) => {
+    const newConfig = { ...config };
+    const layout = newConfig.showLayouts[layoutIndex];
+    if (!layout.sections) layout.sections = [];
+
+    const newSection = {
+      id: `section-${Date.now()}`,
+      name: 'New Section',
+      type: 'custom',
+      visible: true,
+      showClearButton: false,
+      order: layout.sections.length,
+      items: []
+    };
+
+    layout.sections.push(newSection);
+    setConfig(newConfig);
+  };
+
+  const removeSection = (layoutIndex, sectionIndex) => {
+    const newConfig = { ...config };
+    newConfig.showLayouts[layoutIndex].sections.splice(sectionIndex, 1);
+    // Recalculate order values
+    newConfig.showLayouts[layoutIndex].sections.forEach((section, idx) => {
+      section.order = idx;
+    });
+    setConfig(newConfig);
+  };
+
+  const updateSection = (layoutIndex, sectionIndex, field, value) => {
+    const newConfig = { ...config };
+    newConfig.showLayouts[layoutIndex].sections[sectionIndex][field] = value;
+    setConfig(newConfig);
+  };
+
+  const addItemToSection = (layoutIndex, sectionIndex, type, id) => {
+    const newConfig = { ...config };
+    const section = newConfig.showLayouts[layoutIndex].sections[sectionIndex];
+
+    // Check if item already exists in this section
+    const exists = section.items.some(item => item.type === type && item.id === id);
+    if (exists) return;
+
+    section.items.push({
+      type: type,
+      id: id,
+      visible: true,
+      order: section.items.length
+    });
+    setConfig(newConfig);
+  };
+
+  const removeItemFromSection = (layoutIndex, sectionIndex, itemIndex) => {
+    const newConfig = { ...config };
+    const section = newConfig.showLayouts[layoutIndex].sections[sectionIndex];
+    section.items.splice(itemIndex, 1);
+    // Recalculate order values
+    section.items.forEach((item, idx) => {
+      item.order = idx;
+    });
+    setConfig(newConfig);
+  };
+
+  const updateSectionItem = (layoutIndex, sectionIndex, itemId, field, value) => {
+    const newConfig = { ...config };
+    const section = newConfig.showLayouts[layoutIndex].sections[sectionIndex];
+    const item = section.items.find(i => i.id === itemId);
+    if (item) {
+      item[field] = value;
+      setConfig(newConfig);
+    }
+  };
+
+  // Drag and drop for sections
+  const handleSectionDragStart = (e, layoutIndex, sectionIndex) => {
+    setDraggedItem({ type: 'section', layoutIndex, sectionIndex });
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleSectionDragOver = (e, layoutIndex, sectionIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'section' &&
+        draggedItem.layoutIndex === layoutIndex &&
+        draggedItem.sectionIndex !== sectionIndex) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleSectionDrop = (e, layoutIndex, targetIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'section' &&
+        draggedItem.layoutIndex === layoutIndex &&
+        draggedItem.sectionIndex !== targetIndex) {
+      const newConfig = { ...config };
+      const sections = newConfig.showLayouts[layoutIndex].sections;
+      const [removed] = sections.splice(draggedItem.sectionIndex, 1);
+      sections.splice(targetIndex, 0, removed);
+      // Recalculate order values
+      sections.forEach((section, idx) => {
+        section.order = idx;
+      });
+      setConfig(newConfig);
+    }
+    setDraggedItem(null);
+  };
+
+  // Drag and drop for items within a section
+  const handleSectionItemDragStart = (e, layoutIndex, sectionIndex, itemIndex) => {
+    e.stopPropagation(); // Prevent section drag from interfering
+    setDraggedItem({ type: 'sectionItem', layoutIndex, sectionIndex, itemIndex });
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleSectionItemDragOver = (e, layoutIndex, sectionIndex, itemIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'sectionItem' &&
+        draggedItem.layoutIndex === layoutIndex &&
+        draggedItem.sectionIndex === sectionIndex &&
+        draggedItem.itemIndex !== itemIndex) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleSectionItemDrop = (e, layoutIndex, sectionIndex, targetIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'sectionItem' &&
+        draggedItem.layoutIndex === layoutIndex &&
+        draggedItem.sectionIndex === sectionIndex &&
+        draggedItem.itemIndex !== targetIndex) {
+      const newConfig = { ...config };
+      const items = newConfig.showLayouts[layoutIndex].sections[sectionIndex].items;
+      const [removed] = items.splice(draggedItem.itemIndex, 1);
+      items.splice(targetIndex, 0, removed);
+      // Recalculate order values
+      items.forEach((item, idx) => {
+        item.order = idx;
+      });
+      setConfig(newConfig);
+    }
+    setDraggedItem(null);
+  };
+
   // === FIXTURE FUNCTIONS ===
   const addFixture = () => {
     const newConfig = { ...config };
@@ -406,8 +746,11 @@ const SettingsPage = () => {
     <div className="settings-page">
       <div className="settings-header">
         <h1>Settings</h1>
-        <button className="back-btn" onClick={() => navigate('/')}>
-          Back
+        <button className="settings-btn" onClick={() => navigate('/home')} title="Go to Home">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
+            <polyline points="9 22 9 12 15 12 15 22"></polyline>
+          </svg>
         </button>
       </div>
 
@@ -1259,6 +1602,418 @@ const SettingsPage = () => {
               <button className="btn btn-primary" onClick={addLook} style={{ marginTop: '12px' }}>
                 + Add Look
               </button>
+        </div>
+      </div>
+      )}
+
+      {/* Show Layout Editor Tab */}
+      {activeTab === 'showlayout' && (
+      <div className="card">
+        <div className="settings-section">
+          <h3>Show Layout Editor</h3>
+
+          <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px', marginTop: '12px' }}>
+            Create custom layouts that control what appears on the main lighting control page.
+            Each layout can have its own branding, colors, and selection of looks/fixtures.
+            Access layouts at <code>/home</code> or <code>/layout-name</code>.
+          </p>
+
+          {(config.showLayouts || []).map((layout, layoutIndex) => {
+            const isCollapsed = collapsedLayouts[layout.id];
+            const isHome = layout.isHome;
+
+            return (
+              <div
+                key={layout.id}
+                className="fixture-editor"
+                style={{
+                  position: 'relative',
+                  padding: isCollapsed ? '12px' : '16px',
+                  border: isHome ? '2px solid #4a90e2' : '1px solid #444',
+                  background: isHome ? '#2a3a4a' : '#333',
+                  marginBottom: '12px'
+                }}
+              >
+                {/* Header row - always visible */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span
+                    onClick={() => setCollapsedLayouts(prev => ({ ...prev, [layout.id]: !prev[layout.id] }))}
+                    style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                  >▼</span>
+                  <input
+                    type="text"
+                    value={layout.name}
+                    onChange={(e) => updateShowLayout(layoutIndex, 'name', e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px' }}
+                  />
+                  {isHome && (
+                    <span style={{ color: '#4a90e2', fontSize: '12px', fontWeight: '600', padding: '4px 8px', background: '#1a3a5a', borderRadius: '4px' }}>
+                      HOME
+                    </span>
+                  )}
+                  {isCollapsed && (
+                    <span style={{ color: '#666', fontSize: '12px' }}>
+                      {layout.items.filter(i => i.visible).length} visible items • /{layout.urlSlug}
+                    </span>
+                  )}
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    {!isHome && (
+                      <button
+                        className="btn btn-secondary btn-small"
+                        onClick={() => setHomeLayout(layout.id)}
+                        style={{ padding: '4px 8px', fontSize: '12px' }}
+                        title="Set as Home Layout"
+                      >
+                        Set Home
+                      </button>
+                    )}
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={() => duplicateShowLayout(layoutIndex)}
+                      style={{ padding: '4px 8px', fontSize: '12px' }}
+                      title="Duplicate Layout"
+                    >⧉</button>
+                    <button
+                      className="btn btn-danger btn-small"
+                      onClick={() => removeShowLayout(layoutIndex)}
+                      style={{ padding: '4px 8px', fontSize: '12px' }}
+                      title="Delete Layout"
+                    >×</button>
+                  </div>
+                </div>
+
+                {/* Expanded content */}
+                {!isCollapsed && (
+                <>
+                  {/* URL Slug Display */}
+                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#888' }}>
+                    URL: <code style={{ background: '#1a1a2e', padding: '2px 6px', borderRadius: '3px' }}>/{layout.urlSlug}</code>
+                  </div>
+
+                  {/* Layout Properties */}
+                  <div style={{ marginTop: '16px', padding: '12px', background: '#252538', borderRadius: '6px' }}>
+                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Layout Properties</h4>
+
+                    {/* Logo Upload */}
+                    <div className="form-group">
+                      <label>Logo Header</label>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <label className="btn btn-secondary btn-small" style={{ marginBottom: 0, cursor: 'pointer' }}>
+                          Upload Image
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/jpg"
+                            onChange={(e) => handleLogoUpload(layoutIndex, e)}
+                            style={{ display: 'none' }}
+                          />
+                        </label>
+                        {layout.logo && (
+                          <>
+                            <button
+                              className="btn btn-danger btn-small"
+                              onClick={() => updateShowLayout(layoutIndex, 'logo', null)}
+                              style={{ marginBottom: 0 }}
+                            >
+                              Remove Logo
+                            </button>
+                            <img
+                              src={layout.logo}
+                              alt="Logo preview"
+                              style={{ maxHeight: '40px', maxWidth: '200px', borderRadius: '4px' }}
+                            />
+                          </>
+                        )}
+                      </div>
+                      <small>Displayed as banner above the title on main page (max 500KB)</small>
+                    </div>
+
+                    {/* Background Color */}
+                    <div className="form-group">
+                      <label>Background Color</label>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                          type="color"
+                          value={layout.backgroundColor}
+                          onChange={(e) => updateShowLayout(layoutIndex, 'backgroundColor', e.target.value)}
+                          style={{ width: '60px', height: '40px', cursor: 'pointer' }}
+                        />
+                        <input
+                          type="text"
+                          value={layout.backgroundColor}
+                          onChange={(e) => updateShowLayout(layoutIndex, 'backgroundColor', e.target.value)}
+                          style={{ flex: 1, fontFamily: 'monospace' }}
+                        />
+                      </div>
+                      <small>Main page background color</small>
+                    </div>
+
+                    {/* Title */}
+                    <div className="form-group">
+                      <label>Page Title</label>
+                      <input
+                        type="text"
+                        value={layout.title}
+                        onChange={(e) => updateShowLayout(layoutIndex, 'title', e.target.value)}
+                        placeholder="Lighting"
+                      />
+                    </div>
+
+                    {/* Show/Hide Options */}
+                    <div className="form-group checkbox-group">
+                      <input
+                        type="checkbox"
+                        id={`showName-${layout.id}`}
+                        checked={layout.showName === true}
+                        onChange={(e) => updateShowLayout(layoutIndex, 'showName', e.target.checked)}
+                      />
+                      <label htmlFor={`showName-${layout.id}`}>Show Layout Name on Main Page</label>
+                    </div>
+
+                    <div className="form-group checkbox-group">
+                      <input
+                        type="checkbox"
+                        id={`showBlackout-${layout.id}`}
+                        checked={layout.showBlackoutButton !== false}
+                        onChange={(e) => updateShowLayout(layoutIndex, 'showBlackoutButton', e.target.checked)}
+                      />
+                      <label htmlFor={`showBlackout-${layout.id}`}>Show Blackout Button</label>
+                    </div>
+                  </div>
+
+                  {/* Sections Configuration */}
+                  <div style={{ marginTop: '16px' }}>
+                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Sections</h4>
+                    <p style={{ fontSize: '12px', color: '#888', marginBottom: '12px' }}>
+                      Sections organize your layout. Static sections (Looks/Fixtures) can only contain their type. Custom sections can mix any items.
+                    </p>
+
+                    {/* Sections List */}
+                    {(layout.sections || [])
+                      .sort((a, b) => a.order - b.order)
+                      .map((section, sectionIndex) => {
+                        const isStatic = section.type === 'static';
+
+                        return (
+                          <div
+                            key={section.id}
+                            draggable
+                            onDragStart={(e) => handleSectionDragStart(e, layoutIndex, sectionIndex)}
+                            onDragOver={(e) => handleSectionDragOver(e, layoutIndex, sectionIndex)}
+                            onDrop={(e) => handleSectionDrop(e, layoutIndex, sectionIndex)}
+                            style={{
+                              background: '#252538',
+                              padding: '12px',
+                              borderRadius: '6px',
+                              marginBottom: '12px',
+                              border: isStatic ? '1px solid #4a4a6a' : '1px solid #444'
+                            }}
+                          >
+                            {/* Section Header */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                              <div style={{ color: '#666', fontSize: '14px', cursor: 'grab' }}>☰</div>
+                              <input
+                                type="text"
+                                value={section.name}
+                                onChange={(e) => updateSection(layoutIndex, sectionIndex, 'name', e.target.value)}
+                                disabled={isStatic}
+                                style={{
+                                  flex: 1,
+                                  background: isStatic ? '#1a1a2e80' : '#1a1a2e',
+                                  border: '1px solid #333',
+                                  borderRadius: '4px',
+                                  padding: '6px 10px',
+                                  color: '#f0f0f0',
+                                  fontSize: '14px',
+                                  fontWeight: '500'
+                                }}
+                              />
+                              {isStatic && (
+                                <span style={{
+                                  fontSize: '10px',
+                                  padding: '3px 8px',
+                                  background: '#4a4a6a',
+                                  borderRadius: '3px',
+                                  color: '#ccc',
+                                  textTransform: 'uppercase',
+                                  fontWeight: '600'
+                                }}>
+                                  STATIC
+                                </span>
+                              )}
+                              <div className="form-group checkbox-group" style={{ marginBottom: 0 }}>
+                                <input
+                                  type="checkbox"
+                                  id={`section-visible-${section.id}`}
+                                  checked={section.visible !== false}
+                                  onChange={(e) => updateSection(layoutIndex, sectionIndex, 'visible', e.target.checked)}
+                                />
+                                <label htmlFor={`section-visible-${section.id}`} style={{ fontSize: '12px' }}>
+                                  Visible
+                                </label>
+                              </div>
+                              {!isStatic && (
+                                <button
+                                  className="btn btn-danger btn-small"
+                                  onClick={() => removeSection(layoutIndex, sectionIndex)}
+                                  style={{ padding: '4px 8px', fontSize: '12px' }}
+                                  title="Delete Section"
+                                >×</button>
+                              )}
+                            </div>
+
+                            {/* Section Options */}
+                            <div style={{ display: 'flex', gap: '8px', marginBottom: '8px', alignItems: 'center' }}>
+                              <label style={{ fontSize: '12px', color: '#888' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={section.showClearButton === true}
+                                  onChange={(e) => updateSection(layoutIndex, sectionIndex, 'showClearButton', e.target.checked)}
+                                  style={{ marginRight: '4px' }}
+                                />
+                                Show Clear Button
+                              </label>
+                            </div>
+
+                            {/* Add Item Dropdown */}
+                            <div style={{ marginBottom: '8px' }}>
+                              <select
+                                onChange={(e) => {
+                                  const [type, id] = e.target.value.split(':');
+                                  if (type && id) {
+                                    addItemToSection(layoutIndex, sectionIndex, type, id);
+                                    e.target.value = '';
+                                  }
+                                }}
+                                style={{
+                                  width: '100%',
+                                  background: '#1a1a2e',
+                                  border: '1px solid #333',
+                                  borderRadius: '4px',
+                                  padding: '6px 10px',
+                                  color: '#f0f0f0',
+                                  fontSize: '12px'
+                                }}
+                              >
+                                <option value="">+ Add Item to Section...</option>
+                                <optgroup label="Looks">
+                                  {config.looks
+                                    .filter(look => !isStatic || section.staticType === 'looks')
+                                    .map(look => (
+                                      <option key={look.id} value={`look:${look.id}`}>
+                                        {look.name}
+                                      </option>
+                                    ))}
+                                </optgroup>
+                                <optgroup label="Fixtures">
+                                  {config.fixtures
+                                    .filter(fixture => !isStatic || section.staticType === 'fixtures')
+                                    .map(fixture => (
+                                      <option key={fixture.id} value={`fixture:${fixture.id}`}>
+                                        {fixture.name}
+                                      </option>
+                                    ))}
+                                </optgroup>
+                              </select>
+                            </div>
+
+                            {/* Items in Section */}
+                            <div style={{ background: '#1a1a2e', padding: '8px', borderRadius: '4px' }}>
+                              {section.items.length === 0 && (
+                                <p style={{ color: '#666', fontSize: '12px', margin: 0, padding: '8px', textAlign: 'center' }}>
+                                  No items in this section
+                                </p>
+                              )}
+                              {section.items
+                                .sort((a, b) => a.order - b.order)
+                                .map((item, itemIndex) => {
+                                  let itemName = '';
+                                  let itemType = item.type;
+
+                                  if (item.type === 'look') {
+                                    const look = config.looks.find(l => l.id === item.id);
+                                    itemName = look?.name || `Look ${item.id}`;
+                                  } else {
+                                    const fixture = config.fixtures.find(f => f.id === item.id);
+                                    itemName = fixture?.name || `Fixture ${item.id}`;
+                                  }
+
+                                  return (
+                                    <div
+                                      key={item.id}
+                                      draggable
+                                      onDragStart={(e) => handleSectionItemDragStart(e, layoutIndex, sectionIndex, itemIndex)}
+                                      onDragOver={(e) => handleSectionItemDragOver(e, layoutIndex, sectionIndex, itemIndex)}
+                                      onDrop={(e) => handleSectionItemDrop(e, layoutIndex, sectionIndex, itemIndex)}
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        padding: '6px 8px',
+                                        marginBottom: '4px',
+                                        background: item.visible ? '#2a3a2a' : '#3a2a2a',
+                                        borderRadius: '4px',
+                                        border: item.visible ? '1px solid #4a6a4a' : '1px solid #6a4a4a',
+                                        cursor: 'grab'
+                                      }}
+                                    >
+                                      <div style={{ color: '#666', fontSize: '12px' }}>☰</div>
+                                      <span style={{
+                                        fontSize: '9px',
+                                        padding: '2px 5px',
+                                        background: itemType === 'look' ? '#4a4a6a' : '#6a4a4a',
+                                        borderRadius: '3px',
+                                        color: '#ccc',
+                                        textTransform: 'uppercase',
+                                        fontWeight: '600'
+                                      }}>
+                                        {itemType}
+                                      </span>
+                                      <span style={{ flex: 1, color: item.visible ? '#e0e0e0' : '#888', fontSize: '12px' }}>
+                                        {itemName}
+                                      </span>
+                                      <div className="form-group checkbox-group" style={{ marginBottom: 0 }}>
+                                        <input
+                                          type="checkbox"
+                                          id={`item-visible-${section.id}-${item.id}`}
+                                          checked={item.visible === true}
+                                          onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'visible', e.target.checked)}
+                                        />
+                                        <label htmlFor={`item-visible-${section.id}-${item.id}`} style={{ fontSize: '11px' }}>
+                                          Show
+                                        </label>
+                                      </div>
+                                      <button
+                                        className="btn btn-danger btn-small"
+                                        onClick={() => removeItemFromSection(layoutIndex, sectionIndex, itemIndex)}
+                                        style={{ padding: '2px 6px', fontSize: '11px' }}
+                                        title="Remove from Section"
+                                      >×</button>
+                                    </div>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={() => addSection(layoutIndex)}
+                      style={{ marginTop: '8px' }}
+                    >
+                      + Add Custom Section
+                    </button>
+                  </div>
+                </>
+                )}
+              </div>
+            );
+          })}
+
+          <button className="btn btn-primary" onClick={addShowLayout} style={{ marginTop: '12px' }}>
+            + Add Layout
+          </button>
         </div>
       </div>
       )}

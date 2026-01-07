@@ -1,7 +1,21 @@
 const e131 = require('e131');
 const dgram = require('dgram');
+const os = require('os');
 const config = require('./config');
 const dmxEngine = require('./dmxEngine');
+
+// Find the first non-internal IPv4 address for multicast binding
+function getDefaultMulticastInterface() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return null;
+}
 
 class OutputEngine {
   constructor() {
@@ -77,45 +91,108 @@ class OutputEngine {
       const universeInt = parseInt(universeNum);
       const dmxData = universes[universeNum];
 
-      // Create or reuse client for this universe
-      const clientKey = `sacn_${universeNum}`;
-      if (!this.clients[clientKey]) {
-        const clientOptions = { universe: universeInt };
-
-        // Bind to specific interface if specified
-        if (sacnCfg.bindAddress) {
-          clientOptions.reuseAddr = true;
-          console.log(`sACN will bind to interface: ${sacnCfg.bindAddress}`);
-        }
-
-        this.clients[clientKey] = new e131.Client(universeInt);
-
-        // Note: e131 library doesn't directly support interface binding in constructor
-        // For production, you may need to use a different library or fork e131
-      }
-
-      const client = this.clients[clientKey];
-      const packet = client.createPacket(512);
-      const slotsData = packet.getSlotsData();
-
-      // Copy DMX data into packet
-      for (let i = 0; i < 512; i++) {
-        slotsData[i] = dmxData[i];
-      }
-
-      packet.setSourceName('NMS DMX Control');
-      packet.setPriority(sacnCfg.priority || 100);
-
       if (sacnCfg.multicast) {
-        // Send multicast
-        client.send(packet);
-      } else {
-        // Send unicast to specified destinations
-        if (sacnCfg.unicastDestinations && sacnCfg.unicastDestinations.length > 0) {
-          sacnCfg.unicastDestinations.forEach(dest => {
-            client.send(packet, () => {}, dest);
-          });
+        // Multicast mode: one client per universe
+        const clientKey = `sacn_${universeNum}`;
+        if (!this.clients[clientKey]) {
+          const client = new e131.Client(universeInt);
+          
+          // Set multicast interface to ensure packets go out the correct network interface
+          // Use configured bindAddress, or auto-detect the first external interface
+          const multicastInterface = sacnCfg.bindAddress || getDefaultMulticastInterface();
+          if (multicastInterface && client._socket) {
+            // Bind the socket first (required before setting multicast options)
+            client._socket.bind(0, multicastInterface, () => {
+              try {
+                client._socket.setMulticastTTL(64);
+                client._socket.setMulticastInterface(multicastInterface);
+                console.log(`sACN multicast interface set to: ${multicastInterface}`);
+              } catch (err) {
+                console.error(`Failed to set multicast interface: ${err.message}`);
+              }
+            });
+          }
+          
+          this.clients[clientKey] = client;
+          const multicastAddr = `239.255.${Math.floor(universeInt / 256)}.${universeInt % 256}`;
+          console.log(`sACN multicast client created for universe ${universeInt} → ${multicastAddr}:5568`);
         }
+
+        const client = this.clients[clientKey];
+        const packet = client.createPacket(512);
+        const slotsData = packet.getSlotsData();
+
+        for (let i = 0; i < 512; i++) {
+          slotsData[i] = dmxData[i];
+        }
+
+        packet.setSourceName('NMS DMX Control');
+        packet.setPriority(sacnCfg.priority || 100);
+        packet.setUniverse(universeInt);
+
+        // Log non-zero channels for debugging
+        const nonZeroChannels = [];
+        for (let i = 0; i < dmxData.length; i++) {
+          if (dmxData[i] > 0) {
+            nonZeroChannels.push(`Ch${i + 1}=${dmxData[i]}`);
+          }
+        }
+
+        if (nonZeroChannels.length > 0) {
+          const multicastAddr = `239.255.${Math.floor(universeInt / 256)}.${universeInt % 256}`;
+          console.log(`[sACN TX] → ${multicastAddr}:5568 | Universe:${universeInt} Priority:${sacnCfg.priority || 100} | ${nonZeroChannels.join(', ')}`);
+        }
+
+        client.send(packet, (err) => {
+          if (err) {
+            console.error(`sACN multicast send error (universe ${universeInt}):`, err.message);
+          }
+        });
+      } else {
+        // Unicast mode: one client per universe+destination pair
+        if (!sacnCfg.unicastDestinations || sacnCfg.unicastDestinations.length === 0) {
+          console.warn(`sACN configured for unicast but no destinations specified for universe ${universeInt}`);
+          return;
+        }
+
+        sacnCfg.unicastDestinations.forEach(dest => {
+          const clientKey = `sacn_${universeNum}_${dest}`;
+          if (!this.clients[clientKey]) {
+            // Create unicast client with destination host (pass IP as first arg)
+            this.clients[clientKey] = new e131.Client(dest);
+            console.log(`sACN unicast client created for universe ${universeInt} → ${dest}:5568`);
+          }
+
+          const client = this.clients[clientKey];
+          const packet = client.createPacket(512);
+          const slotsData = packet.getSlotsData();
+
+          for (let i = 0; i < 512; i++) {
+            slotsData[i] = dmxData[i];
+          }
+
+          packet.setSourceName('NMS DMX Control');
+          packet.setPriority(sacnCfg.priority || 100);
+          packet.setUniverse(universeInt);
+
+          // Log non-zero channels for debugging
+          const nonZeroChannels = [];
+          for (let i = 0; i < dmxData.length; i++) {
+            if (dmxData[i] > 0) {
+              nonZeroChannels.push(`Ch${i + 1}=${dmxData[i]}`);
+            }
+          }
+
+          if (nonZeroChannels.length > 0) {
+            console.log(`[sACN TX] → ${dest}:5568 | Universe:${universeInt} Priority:${sacnCfg.priority || 100} | ${nonZeroChannels.join(', ')}`);
+          }
+
+          client.send(packet, (err) => {
+            if (err) {
+              console.error(`sACN unicast send error (universe ${universeInt} to ${dest}):`, err.message);
+            }
+          });
+        });
       }
     });
   }

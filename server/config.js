@@ -136,12 +136,154 @@ class Config {
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-        return JSON.parse(data);
+        let config = JSON.parse(data);
+        // Migrate to showLayouts if not present
+        config = this.ensureShowLayouts(config);
+        return config;
       }
     } catch (error) {
       console.error('Error loading config:', error);
     }
-    return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    let config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    config = this.ensureShowLayouts(config);
+    return config;
+  }
+
+  ensureShowLayouts(config) {
+    // Generate URL-friendly slug from name
+    const generateUrlSlug = (name, existingSlugs = []) => {
+      const baseSlug = name
+        .toLowerCase()
+        .trim()
+        .replace(/[^\w\s-]/g, '')
+        .replace(/\s+/g, '-')
+        .replace(/-+/g, '-')
+        .substring(0, 50);
+
+      // Handle reserved slugs and collisions
+      const reservedSlugs = ['settings', 'dmx-output'];
+      let slug = baseSlug;
+      let counter = 2;
+
+      while (reservedSlugs.includes(slug) || existingSlugs.includes(slug)) {
+        slug = `${baseSlug}-${counter}`;
+        counter++;
+      }
+
+      return slug;
+    };
+
+    if (!config.showLayouts || config.showLayouts.length === 0) {
+      const defaultLayout = {
+        id: `layout-${Date.now()}`,
+        name: "Default Layout",
+        urlSlug: "home",
+        isHome: true,
+        showName: false,
+        backgroundColor: "#1a1a2e",
+        logo: null,
+        title: "Lighting",
+        showBlackoutButton: true,
+        sections: []
+      };
+
+      // Create Looks section with all looks
+      if (config.looks && config.looks.length > 0) {
+        const looksSection = {
+          id: "section-looks",
+          name: "Looks",
+          type: "static",
+          staticType: "looks",
+          visible: true,
+          showClearButton: true,
+          order: 0,
+          items: []
+        };
+        config.looks.forEach((look, index) => {
+          looksSection.items.push({
+            type: "look",
+            id: look.id,
+            visible: true,
+            order: index
+          });
+        });
+        defaultLayout.sections.push(looksSection);
+      }
+
+      // Create Fixtures section with all fixtures
+      if (config.fixtures && config.fixtures.length > 0) {
+        const fixturesSection = {
+          id: "section-fixtures",
+          name: "Fixtures",
+          type: "static",
+          staticType: "fixtures",
+          visible: true,
+          showClearButton: true,
+          order: 1,
+          items: []
+        };
+        config.fixtures.forEach((fixture, index) => {
+          fixturesSection.items.push({
+            type: "fixture",
+            id: fixture.id,
+            visible: fixture.showOnMain !== false,
+            order: index
+          });
+        });
+        defaultLayout.sections.push(fixturesSection);
+      }
+
+      config.showLayouts = [defaultLayout];
+    }
+
+    // Migrate old flat items structure to sections
+    if (config.showLayouts) {
+      config.showLayouts.forEach(layout => {
+        if (layout.items && !layout.sections) {
+          // Old structure detected, migrate to sections
+          layout.sections = [];
+
+          const lookItems = layout.items.filter(item => item.type === 'look');
+          const fixtureItems = layout.items.filter(item => item.type === 'fixture');
+
+          if (lookItems.length > 0) {
+            layout.sections.push({
+              id: "section-looks",
+              name: "Looks",
+              type: "static",
+              staticType: "looks",
+              visible: true,
+              showClearButton: true,
+              order: 0,
+              items: lookItems
+            });
+          }
+
+          if (fixtureItems.length > 0) {
+            layout.sections.push({
+              id: "section-fixtures",
+              name: "Fixtures",
+              type: "static",
+              staticType: "fixtures",
+              visible: true,
+              showClearButton: true,
+              order: 1,
+              items: fixtureItems
+            });
+          }
+
+          delete layout.items; // Remove old structure
+        }
+      });
+    }
+
+    // Ensure at least one layout has isHome set
+    const hasHome = config.showLayouts.some(layout => layout.isHome);
+    if (!hasHome && config.showLayouts.length > 0) {
+      config.showLayouts[0].isHome = true;
+    }
+
+    return config;
   }
 
   save() {
