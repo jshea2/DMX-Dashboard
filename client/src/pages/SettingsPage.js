@@ -792,7 +792,7 @@ const SettingsPage = () => {
             style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
           >
             <span style={{ transition: 'transform 0.2s', transform: collapsedSections.network ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-            Network Output
+            Network / DMX Output
           </h3>
 
           {!collapsedSections.network && (
@@ -810,17 +810,6 @@ const SettingsPage = () => {
 
           {config.network.protocol === 'sacn' && (
             <>
-              <div className="form-group">
-                <label>Universe</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="63999"
-                  value={config.network.sacn.universe}
-                  onChange={(e) => updateConfig('network.sacn.universe', parseInt(e.target.value))}
-                />
-              </div>
-
               <div className="form-group">
                 <label>Priority</label>
                 <input
@@ -877,39 +866,6 @@ const SettingsPage = () => {
 
           {config.network.protocol === 'artnet' && (
             <>
-              <div className="form-group">
-                <label>Net</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="127"
-                  value={config.network.artnet.net}
-                  onChange={(e) => updateConfig('network.artnet.net', parseInt(e.target.value))}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Subnet</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="15"
-                  value={config.network.artnet.subnet}
-                  onChange={(e) => updateConfig('network.artnet.subnet', parseInt(e.target.value))}
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Universe</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="15"
-                  value={config.network.artnet.universe}
-                  onChange={(e) => updateConfig('network.artnet.universe', parseInt(e.target.value))}
-                />
-              </div>
-
               <div className="form-group">
                 <label>Destination IP</label>
                 <input
@@ -1244,7 +1200,10 @@ const SettingsPage = () => {
                 const isCollapsed = collapsedFixtures[fixture.id];
                 const channelCount = profile?.channels?.length || 0;
                 const endAddress = fixture.startAddress + channelCount - 1;
-                const summary = `${profile?.name || 'No Profile'} • U${fixture.universe} • Ch ${fixture.startAddress}${channelCount > 1 ? `-${endAddress}` : ''}`;
+                const addressSummary = config.network.protocol === 'artnet' 
+                  ? `Net${fixture.artnetNet || 0}:Sub${fixture.artnetSubnet || 0}:U${fixture.artnetUniverse || 0}`
+                  : `U${fixture.universe}`;
+                const summary = `${profile?.name || 'No Profile'} • ${addressSummary} • Ch ${fixture.startAddress}${channelCount > 1 ? `-${endAddress}` : ''}`;
                 
                 return (
                   <div key={fixture.id} className="fixture-editor" style={{ position: 'relative', padding: isCollapsed ? '12px' : '16px' }}>
@@ -1286,16 +1245,51 @@ const SettingsPage = () => {
                           ))}
                         </select>
                       </div>
-                      <div className="form-group" style={{ width: '100px', marginBottom: '8px' }}>
-                        <label>Universe</label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="63999"
-                          value={fixture.universe}
-                          onChange={(e) => updateFixture(index, 'universe', parseInt(e.target.value))}
-                        />
-                      </div>
+                      {config.network.protocol === 'artnet' ? (
+                        <>
+                          <div className="form-group" style={{ width: '70px', marginBottom: '8px' }}>
+                            <label>Net</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="127"
+                              value={fixture.artnetNet || 0}
+                              onChange={(e) => updateFixture(index, 'artnetNet', parseInt(e.target.value))}
+                            />
+                          </div>
+                          <div className="form-group" style={{ width: '70px', marginBottom: '8px' }}>
+                            <label>Subnet</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="15"
+                              value={fixture.artnetSubnet || 0}
+                              onChange={(e) => updateFixture(index, 'artnetSubnet', parseInt(e.target.value))}
+                            />
+                          </div>
+                          <div className="form-group" style={{ width: '70px', marginBottom: '8px' }}>
+                            <label>Universe</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="15"
+                              value={fixture.artnetUniverse || 0}
+                              onChange={(e) => updateFixture(index, 'artnetUniverse', parseInt(e.target.value))}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="form-group" style={{ width: '100px', marginBottom: '8px' }}>
+                          <label>Universe</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="63999"
+                            value={fixture.universe}
+                            onChange={(e) => updateFixture(index, 'universe', parseInt(e.target.value))}
+                          />
+                        </div>
+                      )}
                       <div className="form-group" style={{ width: '100px', marginBottom: '8px' }}>
                         <label>Start Address</label>
                         <input

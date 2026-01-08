@@ -242,19 +242,23 @@ class OutputEngine {
     const cfg = config.get();
     const artnetCfg = cfg.network.artnet;
 
-    Object.keys(universes).forEach(universeNum => {
-      const dmxData = universes[universeNum];
+    Object.keys(universes).forEach(universeKey => {
+      const dmxData = universes[universeKey];
+
+      // Parse Art-Net addressing from key (format: artnet_net_subnet_universe)
+      let net = 0, subnet = 0, universe = 0;
+      if (universeKey.startsWith('artnet_')) {
+        const parts = universeKey.split('_');
+        net = parseInt(parts[1]) || 0;
+        subnet = parseInt(parts[2]) || 0;
+        universe = parseInt(parts[3]) || 0;
+      }
 
       // Create Art-Net packet
-      const packet = this.createArtNetPacket(
-        artnetCfg.net || 0,
-        artnetCfg.subnet || 0,
-        parseInt(universeNum),
-        dmxData
-      );
+      const packet = this.createArtNetPacket(net, subnet, universe, dmxData);
 
       // Create or reuse UDP socket
-      const clientKey = `artnet_${universeNum}`;
+      const clientKey = `artnet_socket_${universeKey}`;
       if (!this.clients[clientKey]) {
         const socket = dgram.createSocket('udp4');
 
@@ -281,6 +285,7 @@ class OutputEngine {
 
         // Store socket
         this.clients[clientKey] = socket;
+        console.log(`Art-Net client created for Net:${net} Sub:${subnet} Univ:${universe}`);
       }
 
       const socket = this.clients[clientKey];
@@ -296,8 +301,8 @@ class OutputEngine {
       }
 
       if (nonZeroChannels.length > 0) {
-        const portAddress = ((artnetCfg.net & 0x7F) << 8) | ((artnetCfg.subnet & 0x0F) << 4) | (parseInt(universeNum) & 0x0F);
-        console.log(`[Art-Net TX] → ${destination}:${port} | Net:${artnetCfg.net} Sub:${artnetCfg.subnet} Univ:${universeNum} (Port:${portAddress}) | ${nonZeroChannels.join(', ')}`);
+        const portAddress = ((net & 0x7F) << 8) | ((subnet & 0x0F) << 4) | (universe & 0x0F);
+        console.log(`[Art-Net TX] → ${destination}:${port} | Net:${net} Sub:${subnet} Univ:${universe} (Port:${portAddress}) | ${nonZeroChannels.join(', ')}`);
       }
 
       socket.send(packet, port, destination, (err) => {

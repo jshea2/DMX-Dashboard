@@ -69,12 +69,27 @@ class DMXEngine {
     this.initializeUniverses();
   }
 
+  // Get universe key for a fixture based on protocol
+  getUniverseKey(cfg, fixture) {
+    if (cfg.network.protocol === 'artnet') {
+      // For Art-Net: encode net/subnet/universe into a unique key
+      const net = fixture.artnetNet || 0;
+      const subnet = fixture.artnetSubnet || 0;
+      const universe = fixture.artnetUniverse || 0;
+      return `artnet_${net}_${subnet}_${universe}`;
+    } else {
+      // For sACN: use the universe number directly
+      return fixture.universe;
+    }
+  }
+
   initializeUniverses() {
     const cfg = config.get();
     // Initialize universe buffers based on fixtures
     cfg.fixtures.forEach(fixture => {
-      if (!this.universes[fixture.universe]) {
-        this.universes[fixture.universe] = new Array(512).fill(0);
+      const universeKey = this.getUniverseKey(cfg, fixture);
+      if (!this.universes[universeKey]) {
+        this.universes[universeKey] = new Array(512).fill(0);
       }
     });
   }
@@ -82,6 +97,14 @@ class DMXEngine {
   computeOutput() {
     const currentState = state.get();
     const cfg = config.get();
+
+    // Reinitialize universes in case fixtures changed
+    cfg.fixtures.forEach(fixture => {
+      const universeKey = this.getUniverseKey(cfg, fixture);
+      if (!this.universes[universeKey]) {
+        this.universes[universeKey] = new Array(512).fill(0);
+      }
+    });
 
     // Clear all universes
     Object.keys(this.universes).forEach(univ => {
@@ -96,7 +119,8 @@ class DMXEngine {
     // HTP (Highest Takes Precedence) blending
     cfg.fixtures.forEach(fixture => {
       const fixtureId = fixture.id;
-      const universe = this.universes[fixture.universe];
+      const universeKey = this.getUniverseKey(cfg, fixture);
+      const universe = this.universes[universeKey];
       const profile = getProfile(cfg, fixture);
 
       if (!universe || !profile) return;
