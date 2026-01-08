@@ -116,7 +116,7 @@ app.post('/api/config/import', (req, res) => {
 // Capture current state into a look
 app.post('/api/looks/:lookId/capture', (req, res) => {
   const { lookId } = req.params;
-  const currentState = state.get();
+  const { targets } = req.body;
   const cfg = config.get();
 
   const look = cfg.looks.find(l => l.id === lookId);
@@ -124,13 +124,14 @@ app.post('/api/looks/:lookId/capture', (req, res) => {
     return res.status(404).json({ success: false, error: 'Look not found' });
   }
 
-  // Capture current fixture values dynamically for all fixtures
-  look.targets = {};
-  cfg.fixtures.forEach(fixture => {
-    if (currentState.fixtures[fixture.id]) {
-      look.targets[fixture.id] = { ...currentState.fixtures[fixture.id] };
-    }
-  });
+  // Use targets sent from client (current HTP-computed values)
+  // This captures exactly what's displayed on the sliders
+  if (targets) {
+    look.targets = targets;
+  } else {
+    // Fallback: empty targets if none provided
+    look.targets = {};
+  }
 
   config.update(cfg);
   res.json({ success: true, look });

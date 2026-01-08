@@ -45,6 +45,26 @@
   background: #218838;
 }
 
+.clear-overrides-btn {
+  padding: 12px 24px;
+  font-size: 18px;
+  font-weight: 600;
+  background: #e2904a;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.clear-overrides-btn:hover {
+  background: #d17a35;
+}
+
+.clear-overrides-btn:active {
+  background: #c06a25;
+}
+
 .card {
   background: #2a2a2a;
   border-radius: 12px;
@@ -78,6 +98,9 @@
 .slider-label span:first-child {
   font-size: 18px;
   font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .slider-label span:last-child {
@@ -94,7 +117,7 @@
   border-radius: 8px;
   background: #444;
   outline: none;
-  transition: background 0.15s;
+  transition: background 0.15s, outline 0.2s ease, outline-offset 0.2s ease;
 }
 
 .slider::-webkit-slider-thumb {
@@ -592,4 +615,13 @@
 
 .slider.yellow-slider::-moz-range-thumb {
   background: #e2e24a;
+}
+
+/* White outline for manually-adjusted channels */
+.slider.manual-value::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.8);
+}
+
+.slider.manual-value::-moz-range-thumb {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.8);
 }

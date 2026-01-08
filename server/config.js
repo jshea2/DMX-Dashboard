@@ -93,6 +93,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'look1',
       name: 'Warm Dramatic',
+      color: 'orange',
       targets: {
         panel1: { hue: 30, brightness: 75 },
         panel2: { hue: 30, brightness: 75 },
@@ -103,6 +104,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'look2',
       name: 'Cool Dramatic',
+      color: 'cyan',
       targets: {
         panel1: { hue: 200, brightness: 70 },
         panel2: { hue: 200, brightness: 70 },
@@ -113,6 +115,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'look3',
       name: 'Vibrant',
+      color: 'purple',
       targets: {
         panel1: { hue: 280, brightness: 85 },
         panel2: { hue: 120, brightness: 85 },
