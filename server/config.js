@@ -177,18 +177,24 @@ class Config {
     };
 
     if (!config.showLayouts || config.showLayouts.length === 0) {
+      const layoutId = `layout-${Date.now()}`;
       const defaultLayout = {
-        id: `layout-${Date.now()}`,
+        id: layoutId,
         name: "Default Layout",
         urlSlug: "home",
-        isHome: true,
         showName: false,
         backgroundColor: "#1a1a2e",
         logo: null,
         title: "Lighting",
         showBlackoutButton: true,
+        showLayoutSelector: true,
         sections: []
       };
+
+      // Set as active layout
+      if (!config.activeLayoutId) {
+        config.activeLayoutId = layoutId;
+      }
 
       // Create Looks section with all looks
       if (config.looks && config.looks.length > 0) {
@@ -280,10 +286,9 @@ class Config {
       });
     }
 
-    // Ensure at least one layout has isHome set
-    const hasHome = config.showLayouts.some(layout => layout.isHome);
-    if (!hasHome && config.showLayouts.length > 0) {
-      config.showLayouts[0].isHome = true;
+    // Ensure there's an active layout set
+    if (!config.activeLayoutId && config.showLayouts.length > 0) {
+      config.activeLayoutId = config.showLayouts[0].id;
     }
 
     return config;

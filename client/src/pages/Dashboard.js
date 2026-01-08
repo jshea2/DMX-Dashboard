@@ -178,20 +178,26 @@ const Dashboard = () => {
       .then(res => res.json())
       .then(data => {
         setConfig(data);
-        // Find active layout by activeLayoutId or fall back to first layout or isHome
+        // Find active layout by activeLayoutId or fall back to first layout
         let layout;
         if (data.activeLayoutId) {
           layout = data.showLayouts?.find(l => l.id === data.activeLayoutId);
         }
-        if (!layout) {
-          layout = data.showLayouts?.find(l => l.isHome) || data.showLayouts?.[0];
+        // If no active layout set or not found, use first available layout
+        if (!layout && data.showLayouts?.length > 0) {
+          layout = data.showLayouts[0];
+          // Set it as active layout on server
+          fetch('/api/config/active-layout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ activeLayoutId: layout.id })
+          }).catch(err => console.error('Failed to set active layout:', err));
         }
         // Fallback to creating a default layout if none found
         if (!layout) {
           layout = {
             id: 'default',
             name: 'Default Layout',
-            isHome: true,
             showName: false,
             backgroundColor: '#1a1a2e',
             showBlackoutButton: true,
@@ -204,6 +210,17 @@ const Dashboard = () => {
       })
       .catch(err => console.error('Failed to fetch config:', err));
   }, []);
+
+  // Apply background color to body element for full-width background
+  useEffect(() => {
+    if (activeLayout?.backgroundColor) {
+      document.body.style.backgroundColor = activeLayout.backgroundColor;
+    }
+    // Cleanup: reset to default when component unmounts
+    return () => {
+      document.body.style.backgroundColor = '';
+    };
+  }, [activeLayout?.backgroundColor]);
 
   const handleBlackout = () => {
     sendUpdate({ blackout: !state.blackout });
@@ -430,7 +447,7 @@ const Dashboard = () => {
 
   if (!config || !activeLayout) {
     return (
-      <div className="app" style={{ background: '#1a1a2e' }}>
+      <div className="app">
         <div className="header">
           <h1>Loading...</h1>
         </div>
@@ -444,10 +461,10 @@ const Dashboard = () => {
     .sort((a, b) => a.order - b.order);
 
   return (
-    <div className="app" style={{ background: activeLayout.backgroundColor || '#1a1a2e' }}>
+    <div className="app">
       <div className="header">
         {/* Layout Selector Dropdown */}
-        {activeLayout.showLayoutSelector !== false && config.showLayouts?.length > 1 && (
+        {activeLayout.showLayoutSelector !== false && (
           <div style={{ marginBottom: '12px' }}>
             <select
               value={activeLayout.id}
@@ -619,7 +636,7 @@ const Dashboard = () => {
                       transition: 'box-shadow 0.3s ease'
                     }}
                   >
-                    <h3>{fixture.name} <span style={{ fontSize: '12px', color: '#888', fontWeight: 'normal' }}>({fixture.id})</span></h3>
+                    <h3>{fixture.name}</h3>
                     <div className="fixture-controls">
                       {profile.channels?.map(channel => {
                         const key = `${fixture.id}.${channel.name}`;

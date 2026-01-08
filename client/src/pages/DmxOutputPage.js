@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 const DmxOutputPage = () => {
   const navigate = useNavigate();
   const [dmxData, setDmxData] = useState({});
-  const [selectedUniverse, setSelectedUniverse] = useState(1);
+  const [selectedUniverse, setSelectedUniverse] = useState(null);
   const [config, setConfig] = useState(null);
 
   useEffect(() => {
@@ -25,16 +25,26 @@ const DmxOutputPage = () => {
     fetch('/api/dmx-output')
       .then(res => res.json())
       .then(data => {
+        console.log('DMX Output data:', data);
         setDmxData(data);
         // Set default universe if not set
         if (!selectedUniverse && Object.keys(data).length > 0) {
-          setSelectedUniverse(parseInt(Object.keys(data)[0]));
+          const firstKey = Object.keys(data)[0];
+          // Handle both numeric and string keys (sACN vs Art-Net)
+          setSelectedUniverse(isNaN(firstKey) ? firstKey : parseInt(firstKey));
         }
       })
       .catch(err => console.error('Failed to fetch DMX output:', err));
   };
 
-  const universes = Object.keys(dmxData).map(u => parseInt(u)).sort((a, b) => a - b);
+  // Handle both numeric (sACN) and string (Art-Net) universe keys
+  const universes = Object.keys(dmxData).sort((a, b) => {
+    const aNum = parseInt(a);
+    const bNum = parseInt(b);
+    if (isNaN(aNum) || isNaN(bNum)) return a.localeCompare(b);
+    return aNum - bNum;
+  });
+
   const currentUniverseData = dmxData[selectedUniverse] || new Array(512).fill(0);
 
   // Format universe label based on protocol
@@ -75,7 +85,10 @@ const DmxOutputPage = () => {
           <label>Universe</label>
           <select
             value={selectedUniverse}
-            onChange={(e) => setSelectedUniverse(parseInt(e.target.value))}
+            onChange={(e) => {
+              const val = e.target.value;
+              setSelectedUniverse(isNaN(val) ? val : parseInt(val));
+            }}
           >
             {universes.length === 0 && <option value="">No universes configured</option>}
             {universes.map(univ => (
@@ -85,14 +98,6 @@ const DmxOutputPage = () => {
         </div>
 
         <div className="dmx-grid">
-          <div className="dmx-grid-header">
-            {[...Array(16)].map((_, i) => (
-              <div key={i} className="dmx-grid-header-cell">
-                +{i}
-              </div>
-            ))}
-          </div>
-
           {rows.map((row, rowIndex) => (
             <div key={rowIndex} className="dmx-grid-row">
               {row.map(cell => (

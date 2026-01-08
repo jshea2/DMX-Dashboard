@@ -14,13 +14,13 @@ const LOOK_COLORS = [
 ];
 
 const TABS = [
-  { id: 'network', label: 'Network / Output' },
+  { id: 'showlayout', label: 'Dashboard' },
   { id: 'profiles', label: 'Fixture Profiles' },
-  { id: 'patching', label: 'Patching' },
+  { id: 'patching', label: 'Patch' },
   { id: 'looks', label: 'Looks' },
-  { id: 'showlayout', label: 'Show Layout Editor' },
   { id: 'cuelist', label: 'Cue List' },
-  { id: 'dmxoutput', label: 'DMX Viewer' },
+  { id: 'network', label: 'Networking / IO' },
+  { id: 'export', label: 'Export / Import' },
 ];
 
 const SettingsPage = () => {
@@ -33,12 +33,13 @@ const SettingsPage = () => {
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [networkInterfaces, setNetworkInterfaces] = useState([]);
   const [draggedItem, setDraggedItem] = useState(null);
-  const [activeTab, setActiveTab] = useState('network');
+  const [activeTab, setActiveTab] = useState('showlayout');
   const [collapsedSections, setCollapsedSections] = useState({});
   const [collapsedProfiles, setCollapsedProfiles] = useState({});
   const [collapsedFixtures, setCollapsedFixtures] = useState({});
   const [collapsedLayouts, setCollapsedLayouts] = useState({});
   const [patchViewerUniverse, setPatchViewerUniverse] = useState(1);
+  const [dmxData, setDmxData] = useState({});
   const [draggingFixture, setDraggingFixture] = useState(null);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [duplicateFixtureIndex, setDuplicateFixtureIndex] = useState(null);
@@ -54,6 +55,22 @@ const SettingsPage = () => {
     fetchNetworkInterfaces();
   }, []);
 
+  // Fetch DMX data when on patching tab
+  useEffect(() => {
+    if (activeTab !== 'patching') return;
+    
+    const fetchDmxOutput = () => {
+      fetch('/api/dmx-output')
+        .then(res => res.json())
+        .then(data => setDmxData(data))
+        .catch(err => console.error('Failed to fetch DMX output:', err));
+    };
+    
+    fetchDmxOutput();
+    const interval = setInterval(fetchDmxOutput, 100); // Update 10 times per second
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
   const fetchNetworkInterfaces = () => {
     fetch('/api/network-interfaces')
       .then(res => res.json())
@@ -68,6 +85,36 @@ const SettingsPage = () => {
         setConfig(data);
         setOriginalConfig(JSON.stringify(data));
         setHasUnsavedChanges(false);
+
+        // Set all items to collapsed by default
+        const profilesCollapsed = {};
+        data.fixtureProfiles?.forEach(profile => {
+          profilesCollapsed[profile.id] = true;
+        });
+        setCollapsedProfiles(profilesCollapsed);
+
+        const fixturesCollapsed = {};
+        data.fixtures?.forEach(fixture => {
+          fixturesCollapsed[fixture.id] = true;
+        });
+        setCollapsedFixtures(fixturesCollapsed);
+
+        const layoutsCollapsed = {};
+        data.showLayouts?.forEach(layout => {
+          layoutsCollapsed[layout.id] = true;
+        });
+        setCollapsedLayouts(layoutsCollapsed);
+
+        const looksCollapsed = {};
+        data.looks?.forEach(look => {
+          looksCollapsed[look.id] = true;
+        });
+        setCollapsedSections(looksCollapsed);
+
+        // Set patch viewer universe to the first fixture's universe
+        if (data.fixtures?.length > 0) {
+          setPatchViewerUniverse(data.fixtures[0].universe || 1);
+        }
       })
       .catch(err => console.error('Failed to fetch config:', err));
   };
@@ -98,13 +145,26 @@ const SettingsPage = () => {
 
   // Navigation with unsaved changes warning
   const handleNavigation = useCallback((path) => {
+    // Check if navigating to dashboard with hidden settings button
+    if (path === '/dashboard' && config) {
+      const activeLayout = config.showLayouts?.find(l => l.id === config.activeLayoutId) || config.showLayouts?.[0];
+      if (activeLayout?.showSettingsButton === false) {
+        const confirmed = window.confirm(
+          'Warning: To get back to settings page you must manually type it in the URL. Replace "/dashboard" with "/settings".\n\nWould you like to continue?'
+        );
+        if (!confirmed) {
+          return; // Cancel navigation
+        }
+      }
+    }
+
     if (hasUnsavedChanges) {
       setPendingNavigation(path);
       setShowUnsavedModal(true);
     } else {
       navigate(path);
     }
-  }, [hasUnsavedChanges, navigate]);
+  }, [hasUnsavedChanges, navigate, config]);
 
   const handleDiscardChanges = () => {
     setShowUnsavedModal(false);
@@ -231,6 +291,54 @@ const SettingsPage = () => {
       const newConfig = { ...config };
       const [removed] = newConfig.fixtureProfiles.splice(draggedItem.index, 1);
       newConfig.fixtureProfiles.splice(targetIndex, 0, removed);
+      setConfig(newConfig);
+    }
+    setDraggedItem(null);
+  };
+
+  // Drag and drop for fixtures
+  const handleFixtureDragStart = (e, index) => {
+    setDraggedItem({ type: 'fixture', index });
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleFixtureDragOver = (e, index) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'fixture' && draggedItem.index !== index) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleFixtureDrop = (e, targetIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'fixture' && draggedItem.index !== targetIndex) {
+      const newConfig = { ...config };
+      const [removed] = newConfig.fixtures.splice(draggedItem.index, 1);
+      newConfig.fixtures.splice(targetIndex, 0, removed);
+      setConfig(newConfig);
+    }
+    setDraggedItem(null);
+  };
+
+  // Drag and drop for looks
+  const handleLookDragStart = (e, index) => {
+    setDraggedItem({ type: 'look', index });
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleLookDragOver = (e, index) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'look' && draggedItem.index !== index) {
+      e.dataTransfer.dropEffect = 'move';
+    }
+  };
+
+  const handleLookDrop = (e, targetIndex) => {
+    e.preventDefault();
+    if (draggedItem?.type === 'look' && draggedItem.index !== targetIndex) {
+      const newConfig = { ...config };
+      const [removed] = newConfig.looks.splice(draggedItem.index, 1);
+      newConfig.looks.splice(targetIndex, 0, removed);
       setConfig(newConfig);
     }
     setDraggedItem(null);
@@ -377,37 +485,52 @@ const SettingsPage = () => {
       id: newId,
       name: name,
       urlSlug: urlSlug,
-      isHome: newConfig.showLayouts.length === 0, // First layout is home
       showName: true,
       backgroundColor: '#1a1a2e',
       logo: null,
       title: 'Lighting',
       showBlackoutButton: true,
-      items: []
+      showLayoutSelector: true,
+      sections: [
+        {
+          id: 'section-looks',
+          name: 'Looks',
+          type: 'static',
+          staticType: 'looks',
+          visible: true,
+          showClearButton: true,
+          order: 0,
+          items: newConfig.looks.map((look, index) => ({
+            type: 'look',
+            id: look.id,
+            visible: true,
+            order: index
+          }))
+        },
+        {
+          id: 'section-fixtures',
+          name: 'Fixtures',
+          type: 'static',
+          staticType: 'fixtures',
+          visible: true,
+          showClearButton: true,
+          order: 1,
+          items: newConfig.fixtures.map((fixture, index) => ({
+            type: 'fixture',
+            id: fixture.id,
+            visible: true,
+            order: index
+          }))
+        }
+      ]
     };
 
-    // Add all looks
-    newConfig.looks.forEach((look, index) => {
-      newLayout.items.push({
-        type: 'look',
-        id: look.id,
-        visible: true,
-        order: index
-      });
-    });
-
-    // Add all fixtures
-    const lookCount = newConfig.looks.length;
-    newConfig.fixtures.forEach((fixture, index) => {
-      newLayout.items.push({
-        type: 'fixture',
-        id: fixture.id,
-        visible: true,
-        order: lookCount + index
-      });
-    });
-
     newConfig.showLayouts.push(newLayout);
+
+    // Set as active if it's the first layout
+    if (newConfig.showLayouts.length === 1) {
+      newConfig.activeLayoutId = newId;
+    }
     setConfig(newConfig);
   };
 
@@ -415,16 +538,18 @@ const SettingsPage = () => {
     const newConfig = { ...config };
     const layout = newConfig.showLayouts[index];
 
-    // Prevent deleting home layout
-    if (layout.isHome && newConfig.showLayouts.length > 1) {
-      alert('Cannot delete the home layout. Please set another layout as home first.');
+    // Prevent deleting active layout
+    if (layout.id === newConfig.activeLayoutId && newConfig.showLayouts.length > 1) {
+      alert('Cannot delete the active layout. Please set another layout as active first.');
       return;
     }
 
     newConfig.showLayouts.splice(index, 1);
 
-    // If this was the last layout and we deleted it, that's ok
-    // The migration will create a default one next time
+    // If we deleted the active layout and it was the last one, clear activeLayoutId
+    if (layout.id === newConfig.activeLayoutId) {
+      delete newConfig.activeLayoutId;
+    }
 
     setConfig(newConfig);
   };
@@ -439,8 +564,7 @@ const SettingsPage = () => {
       id: `layout-${Date.now()}`,
       name: `${original.name} (Copy)`,
       urlSlug: generateUrlSlug(`${original.name} Copy`, existingSlugs),
-      isHome: false, // Duplicates are never home
-      items: original.items.map(item => ({ ...item }))
+      sections: (original.sections || []).map(section => ({ ...section }))
     };
 
     newConfig.showLayouts.splice(index + 1, 0, duplicate);
@@ -462,12 +586,18 @@ const SettingsPage = () => {
     setConfig(newConfig);
   };
 
-  const setHomeLayout = (layoutId) => {
+  const setActiveLayout = (layoutId) => {
     const newConfig = { ...config };
-    // Set all to false, then set the selected one to true
-    newConfig.showLayouts.forEach(layout => {
-      layout.isHome = layout.id === layoutId;
-    });
+    // Set the active layout ID
+    newConfig.activeLayoutId = layoutId;
+
+    // Also update on server
+    fetch('/api/config/active-layout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activeLayoutId: layoutId })
+    }).catch(err => console.error('Failed to update active layout:', err));
+
     setConfig(newConfig);
   };
 
@@ -995,34 +1125,70 @@ const SettingsPage = () => {
         </div>
       )}
 
-      <div className="settings-header">
-        <h1>Settings {hasUnsavedChanges && <span style={{ color: '#e2904a', fontSize: '14px' }}>• Unsaved</span>}</h1>
-        <button className="settings-btn" onClick={() => handleNavigation('/dashboard')} title="Go to Dashboard">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="white">
-            <rect x="2" y="2" width="9" height="9" rx="2" />
-            <rect x="13" y="2" width="9" height="9" rx="2" />
-            <rect x="2" y="13" width="9" height="9" rx="2" />
-            <rect x="13" y="13" width="9" height="9" rx="2" />
-          </svg>
-        </button>
+      <div className="settings-header" style={{ flexDirection: 'column', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+        <h1 style={{ margin: 0, textAlign: 'center' }}>Settings</h1>
       </div>
+      <button 
+        className="btn" 
+        onClick={() => handleNavigation('/dashboard')}
+        style={{ 
+          fontSize: '14px', 
+          padding: '8px 16px',
+          background: '#4a90e2',
+          color: 'white',
+          border: 'none',
+          borderRadius: '4px',
+          marginBottom: '12px'
+        }}
+      >
+        ← Back to Dashboard
+      </button>
 
       {saved && (
-        <div className="card" style={{ background: '#1a5928', marginBottom: '16px' }}>
+        <div className="card" style={{ background: '#1a5928', marginBottom: '12px' }}>
           <p style={{ margin: 0, fontSize: '16px' }}>✓ Configuration saved successfully!</p>
         </div>
       )}
 
       {/* Main Layout: Tabs on Left, Content on Right */}
-      <div style={{ display: 'flex', gap: '16px' }}>
-        {/* Vertical Tab Navigation */}
+      <div style={{ display: 'flex', gap: '12px', height: 'calc(100vh - 120px)' }}>
+      
+      {/* Fixed Save Button - matches dashboard settings button size */}
+      <button 
+        onClick={handleSave} 
+        title={hasUnsavedChanges ? "Save Configuration (Unsaved Changes)" : "Save Configuration"}
+        style={{
+          position: 'fixed',
+          bottom: '20px',
+          right: '20px',
+          background: hasUnsavedChanges ? '#e2904a' : '#4ae24a',
+          border: 'none',
+          width: '60px',
+          height: '60px',
+          borderRadius: '50%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+          zIndex: 1000
+        }}
+      >
+        <svg width="28" height="28" viewBox="0 0 24 24" fill={hasUnsavedChanges ? 'white' : '#000'}>
+          <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
+        </svg>
+      </button>
+        {/* Vertical Tab Navigation - Fixed */}
         <div className="tabs-container" style={{ 
           display: 'flex', 
           flexDirection: 'column',
           gap: '2px',
           minWidth: '160px',
           borderRight: '2px solid #333',
-          paddingRight: '0'
+          paddingRight: '0',
+          position: 'sticky',
+          top: '0',
+          alignSelf: 'flex-start'
         }}>
           {TABS.map(tab => (
             <button
@@ -1049,8 +1215,8 @@ const SettingsPage = () => {
           ))}
         </div>
 
-        {/* Tab Content */}
-        <div style={{ flex: 1 }}>
+        {/* Tab Content - Scrollable */}
+        <div style={{ flex: 1, overflowY: 'auto', paddingRight: '8px' }}>
 
       {/* Network / Output Tab */}
       {activeTab === 'network' && (
@@ -1213,10 +1379,6 @@ const SettingsPage = () => {
           </div>
             </>
           )}
-
-          <button className="btn btn-primary" onClick={handleSave} style={{ marginTop: '16px' }}>
-            Save Configuration
-          </button>
         </div>
       </div>
       )}
@@ -1226,8 +1388,7 @@ const SettingsPage = () => {
       <div className="card">
         <div className="settings-section">
           <h3>Fixture Profiles</h3>
-          
-              <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px', marginTop: '12px' }}>
+          <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px' }}>
                 Define reusable fixture types with channel configurations
               </p>
 
@@ -1458,10 +1619,6 @@ const SettingsPage = () => {
               <button className="btn btn-primary" onClick={addProfile} style={{ marginTop: '12px' }}>
                 + Add Profile
               </button>
-
-          <button className="btn btn-primary" onClick={handleSave} style={{ marginTop: '16px' }}>
-            Save Configuration
-          </button>
         </div>
       </div>
       )}
@@ -1471,22 +1628,30 @@ const SettingsPage = () => {
       <div className="card">
         <div className="settings-section">
           <h3>Fixture Patching</h3>
-
-              {config.fixtures.map((fixture, index) => {
+          {config.fixtures.map((fixture, index) => {
                 const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
                 const isCollapsed = collapsedFixtures[fixture.id];
                 const channelCount = profile?.channels?.length || 0;
                 const endAddress = fixture.startAddress + channelCount - 1;
-                const addressSummary = config.network.protocol === 'artnet' 
+                const addressSummary = config.network.protocol === 'artnet'
                   ? `Net${fixture.artnetNet || 0}:Sub${fixture.artnetSubnet || 0}:U${fixture.artnetUniverse || 0}`
                   : `U${fixture.universe}`;
                 const summary = `${profile?.name || 'No Profile'} • ${addressSummary} • Ch ${fixture.startAddress}${channelCount > 1 ? `-${endAddress}` : ''}`;
-                
+
                 return (
-                  <div key={fixture.id} className="fixture-editor" style={{ position: 'relative', padding: isCollapsed ? '12px' : '16px' }}>
+                  <div
+                    key={fixture.id}
+                    className="fixture-editor"
+                    style={{ position: 'relative', padding: isCollapsed ? '12px' : '16px' }}
+                    draggable
+                    onDragStart={(e) => handleFixtureDragStart(e, index)}
+                    onDragOver={(e) => handleFixtureDragOver(e, index)}
+                    onDrop={(e) => handleFixtureDrop(e, index)}
+                  >
                     {/* Header row - always visible */}
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <span 
+                      <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                      <span
                         onClick={() => setCollapsedFixtures(prev => ({ ...prev, [fixture.id]: !prev[fixture.id] }))}
                         style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
                       >▼</span>
@@ -1648,6 +1813,10 @@ const SettingsPage = () => {
                     const profile = fixture ? config.fixtureProfiles?.find(p => p.id === fixture.profileId) : null;
                     const channelOffset = fixture ? channel - fixture.startAddress : 0;
                     const channelName = profile?.channels?.[channelOffset]?.name || '';
+                    
+                    // Get DMX value for this channel
+                    const universeData = dmxData[patchViewerUniverse] || [];
+                    const dmxValue = universeData[channel - 1] || 0;
                     const channelCount = profile?.channels?.length || 1;
                     
                     // Determine border for fixture grouping
@@ -1677,23 +1846,27 @@ const SettingsPage = () => {
                       }
                     }
                     
+                    // Calculate intensity overlay for DMX value
+                    const intensityOpacity = dmxValue / 255 * 0.6;
+                    
                     return (
                       <div
                         key={channel}
                         style={{
                           background: hasOverlap ? '#b86800' : (fixture ? getFixtureColor(fixture) : '#1a1a2e'),
-                          padding: '4px 2px',
+                          padding: '2px 1px',
                           textAlign: 'center',
                           color: fixture ? '#fff' : '#555',
                           cursor: fixture ? 'grab' : 'default',
-                          minHeight: '24px',
+                          minHeight: '36px',
                           display: 'flex',
+                          flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
                           position: 'relative',
                           ...borderStyle
                         }}
-                        title={fixture ? `${fixture.name}\n${channelName} (Ch ${channel})\nDrag to move` : `Ch ${channel} - Empty`}
+                        title={fixture ? `${fixture.name}\n${channelName} (Ch ${channel})\nValue: ${dmxValue}\nDrag to move` : `Ch ${channel} - Value: ${dmxValue}`}
                         draggable={!!fixture}
                         onDragStart={(e) => {
                           if (fixture) {
@@ -1719,7 +1892,15 @@ const SettingsPage = () => {
                           setDraggingFixture(null);
                         }}
                       >
-                        {channel}
+                        {/* DMX value intensity overlay */}
+                        <div style={{
+                          position: 'absolute',
+                          inset: 0,
+                          background: `rgba(74, 226, 74, ${intensityOpacity})`,
+                          pointerEvents: 'none'
+                        }} />
+                        <span style={{ fontSize: '9px', opacity: 0.7, position: 'relative', zIndex: 1 }}>{channel}</span>
+                        <span style={{ fontSize: '11px', fontWeight: dmxValue > 0 ? 'bold' : 'normal', position: 'relative', zIndex: 1 }}>{dmxValue}</span>
                       </div>
                     );
                   })}
@@ -1750,10 +1931,6 @@ const SettingsPage = () => {
                   </div>
                 </div>
               </div>
-
-          <button className="btn btn-primary" onClick={handleSave} style={{ marginTop: '16px' }}>
-            Save Configuration
-          </button>
         </div>
       </div>
       )}
@@ -1763,11 +1940,27 @@ const SettingsPage = () => {
       <div className="card">
         <div className="settings-section">
           <h3>Look Editor</h3>
-
-              {config.looks.map((look, lookIndex) => (
-            <div key={look.id} className="look-editor" style={{ position: 'relative' }}>
+          {config.looks.map((look, lookIndex) => {
+                const isCollapsed = collapsedSections[look.id];
+                return (
+            <div
+              key={look.id}
+              className="look-editor"
+              style={{ position: 'relative' }}
+              draggable
+              onDragStart={(e) => handleLookDragStart(e, lookIndex)}
+              onDragOver={(e) => handleLookDragOver(e, lookIndex)}
+              onDrop={(e) => handleLookDrop(e, lookIndex)}
+            >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <h4 style={{ margin: 0 }}>{look.name}</h4>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                  <span
+                    onClick={() => setCollapsedSections(prev => ({ ...prev, [look.id]: !prev[look.id] }))}
+                    style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                  >▼</span>
+                  <h4 style={{ margin: 0 }}>{look.name}</h4>
+                </div>
                 <div style={{ display: 'flex', gap: '8px' }}>
                   <button
                     className="btn btn-secondary"
@@ -1783,6 +1976,9 @@ const SettingsPage = () => {
                   </button>
                 </div>
               </div>
+
+              {!isCollapsed && (
+              <>
 
               <div className="form-group">
                 <label>Look Name</label>
@@ -1860,16 +2056,15 @@ const SettingsPage = () => {
                   );
                 })}
               </div>
+              </>
+              )}
             </div>
-          ))}
+                );
+          })}
 
               <button className="btn btn-primary" onClick={addLook} style={{ marginTop: '12px' }}>
                 + Add Look
               </button>
-
-          <button className="btn btn-primary" onClick={handleSave} style={{ marginTop: '16px' }}>
-            Save Configuration
-          </button>
         </div>
       </div>
       )}
@@ -1878,8 +2073,7 @@ const SettingsPage = () => {
       {activeTab === 'showlayout' && (
       <div className="card">
         <div className="settings-section">
-          <h3>Show Layout Editor</h3>
-
+          <h3>Dashboard Layout Editor</h3>
           <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px', marginTop: '12px' }}>
             Create custom layouts that control what appears on the main lighting control page.
             Each layout can have its own branding, colors, and selection of looks/fixtures.
@@ -1888,7 +2082,7 @@ const SettingsPage = () => {
 
           {(config.showLayouts || []).map((layout, layoutIndex) => {
             const isCollapsed = collapsedLayouts[layout.id];
-            const isHome = layout.isHome;
+            const isActive = config.activeLayoutId === layout.id;
 
             return (
               <div
@@ -1897,8 +2091,8 @@ const SettingsPage = () => {
                 style={{
                   position: 'relative',
                   padding: isCollapsed ? '12px' : '16px',
-                  border: isHome ? '2px solid #4a90e2' : '1px solid #444',
-                  background: isHome ? '#2a3a4a' : '#333',
+                  border: isActive ? '2px solid #4a90e2' : '1px solid #444',
+                  background: isActive ? '#2a3a4a' : '#333',
                   marginBottom: '12px'
                 }}
               >
@@ -1915,25 +2109,25 @@ const SettingsPage = () => {
                     onClick={(e) => e.stopPropagation()}
                     style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px' }}
                   />
-                  {isHome && (
+                  {isActive && (
                     <span style={{ color: '#4a90e2', fontSize: '12px', fontWeight: '600', padding: '4px 8px', background: '#1a3a5a', borderRadius: '4px' }}>
-                      HOME
+                      ACTIVE
                     </span>
                   )}
-                  {isCollapsed && (
+                  {isCollapsed && !isActive && (
                     <span style={{ color: '#666', fontSize: '12px' }}>
-                      {layout.items.filter(i => i.visible).length} visible items • /{layout.urlSlug}
+                      {(layout.sections || []).filter(s => s.visible !== false).length} visible sections
                     </span>
                   )}
                   <div style={{ display: 'flex', gap: '4px' }}>
-                    {!isHome && (
+                    {!isActive && (
                       <button
                         className="btn btn-secondary btn-small"
-                        onClick={() => setHomeLayout(layout.id)}
+                        onClick={() => setActiveLayout(layout.id)}
                         style={{ padding: '4px 8px', fontSize: '12px' }}
-                        title="Set as Home Layout"
+                        title="Set as Active Layout"
                       >
-                        Set Home
+                        Set Active
                       </button>
                     )}
                     <button
@@ -1954,11 +2148,6 @@ const SettingsPage = () => {
                 {/* Expanded content */}
                 {!isCollapsed && (
                 <>
-                  {/* URL Slug Display */}
-                  <div style={{ marginTop: '8px', fontSize: '12px', color: '#888' }}>
-                    URL: <code style={{ background: '#1a1a2e', padding: '2px 6px', borderRadius: '3px' }}>/{layout.urlSlug}</code>
-                  </div>
-
                   {/* Layout Properties */}
                   <div style={{ marginTop: '16px', padding: '12px', background: '#252538', borderRadius: '6px' }}>
                     <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Layout Properties</h4>
@@ -2294,11 +2483,7 @@ const SettingsPage = () => {
           })}
 
           <button className="btn btn-primary" onClick={addShowLayout} style={{ marginTop: '12px' }}>
-            + Add Layout
-          </button>
-
-          <button className="btn btn-primary" onClick={handleSave} style={{ marginTop: '16px' }}>
-            Save Configuration
+            + Add Dashboard
           </button>
         </div>
       </div>
@@ -2314,8 +2499,99 @@ const SettingsPage = () => {
       </div>
       )}
 
-      {/* DMX Output Tab - auto-navigate */}
-      {activeTab === 'dmxoutput' && navigate('/dmx-output')}
+      {/* Export / Import Tab */}
+      {activeTab === 'export' && (
+        <div className="card">
+          <div className="settings-section">
+            <h3>Export / Import Configuration</h3>
+            <p style={{ color: '#888', marginBottom: '24px' }}>
+              Save your entire configuration (fixtures, looks, layouts, etc.) to a JSON file or load a previously saved configuration.
+            </p>
+
+            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
+              <div style={{ flex: '1', minWidth: '250px' }}>
+                <h4 style={{ marginBottom: '12px' }}>Export Configuration</h4>
+                <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '12px' }}>
+                  Download your complete configuration as a JSON file.
+                </p>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    const dataStr = JSON.stringify(config, null, 2);
+                    const dataBlob = new Blob([dataStr], { type: 'application/json' });
+                    const url = URL.createObjectURL(dataBlob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `dmx-config-${new Date().toISOString().split('T')[0]}.json`;
+                    link.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  📥 Export Configuration
+                </button>
+              </div>
+
+              <div style={{ flex: '1', minWidth: '250px' }}>
+                <h4 style={{ marginBottom: '12px' }}>Import Configuration</h4>
+                <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '12px' }}>
+                  Load a configuration file. This will replace your current settings.
+                </p>
+                <label className="btn btn-secondary" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                  📤 Import Configuration
+                  <input
+                    type="file"
+                    accept=".json"
+                    style={{ display: 'none' }}
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (event) => {
+                          try {
+                            const importedConfig = JSON.parse(event.target.result);
+                            if (window.confirm('This will replace your current configuration. Are you sure?')) {
+                              setConfig(importedConfig);
+                              // Optionally auto-save
+                              fetch('/api/config', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(importedConfig)
+                              })
+                                .then(() => {
+                                  alert('Configuration imported successfully!');
+                                  window.location.reload();
+                                })
+                                .catch(err => {
+                                  console.error('Failed to save imported config:', err);
+                                  alert('Import successful but failed to save. Please save manually.');
+                                });
+                            }
+                          } catch (err) {
+                            alert('Invalid JSON file. Please check the file and try again.');
+                            console.error('Import error:', err);
+                          }
+                        };
+                        reader.readAsText(file);
+                      }
+                      e.target.value = ''; // Reset file input
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div style={{ marginTop: '32px', padding: '16px', background: '#1a2a3a', borderRadius: '8px', borderLeft: '4px solid #4a90e2' }}>
+              <h4 style={{ marginTop: 0, marginBottom: '8px' }}>⚠️ Important Notes</h4>
+              <ul style={{ marginBottom: 0, paddingLeft: '20px', color: '#aaa' }}>
+                <li>The exported file contains ALL your settings: fixtures, looks, layouts, cue lists, and network configuration.</li>
+                <li>Importing will completely replace your current configuration.</li>
+                <li>It's recommended to export your configuration regularly as a backup.</li>
+                <li>Make sure to save any unsaved changes before importing.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
 
         </div>{/* End Tab Content */}
       </div>{/* End Main Layout */}
