@@ -627,15 +627,46 @@ const Dashboard = () => {
                 const fixtureState = state.fixtures[fixture.id] || {};
                 const glowStyle = getFixtureGlow(fixture.id, profile);
 
+                // Get active looks affecting this fixture
+                const activeLooksForFixture = config.looks?.filter(look => {
+                  const lookLevel = state.looks?.[look.id] || 0;
+                  return lookLevel > 0 && look.targets?.[fixture.id];
+                }) || [];
+
                 return (
                   <div
                     key={item.id}
                     className="fixture-row"
                     style={{
                       boxShadow: glowStyle,
-                      transition: 'box-shadow 0.3s ease'
+                      transition: 'box-shadow 0.3s ease',
+                      position: 'relative'
                     }}
                   >
+                    {/* Look indicator circles */}
+                    {activeLooksForFixture.length > 0 && (
+                      <div style={{ position: 'absolute', top: '8px', right: '8px', display: 'flex', gap: '4px' }}>
+                        {activeLooksForFixture.map(look => {
+                          const colorMap = {
+                            purple: '#9b4ae2', orange: '#e2904a', cyan: '#4ae2e2',
+                            pink: '#e24a90', yellow: '#e2e24a', blue: '#4a90e2',
+                            red: '#e24a4a', green: '#4ae24a'
+                          };
+                          return (
+                            <div
+                              key={look.id}
+                              title={look.name}
+                              style={{
+                                width: '12px',
+                                height: '12px',
+                                borderRadius: '50%',
+                                background: colorMap[look.color] || '#4a90e2'
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
                     <h3>{fixture.name}</h3>
                     <div className="fixture-controls">
                       {profile.channels?.map(channel => {
@@ -648,7 +679,7 @@ const Dashboard = () => {
                           lookIntensity: 0
                         };
                         // Show all contributors for gradient (not just winners)
-                        const lookColors = meta.contributors.map(c => c.color);
+                        const lookContributors = meta.contributors.map(c => ({ color: c.color, value: c.value }));
 
                         return (
                           <Slider
@@ -661,7 +692,7 @@ const Dashboard = () => {
                             onChange={(value) => handleFixtureChange(fixture.id, channel.name, value)}
                             unit="%"
                             color={getSliderColor(channel.name)}
-                            lookColors={lookColors}
+                            lookContributors={lookContributors}
                             isOverridden={meta.overridden || false}
                             isFrozen={meta.frozen || false}
                             lookIntensity={meta.lookIntensity}

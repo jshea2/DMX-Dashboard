@@ -2149,7 +2149,7 @@ const SettingsPage = () => {
                 {!isCollapsed && (
                 <>
                   {/* Layout Properties */}
-                  <div style={{ marginTop: '16px', padding: '12px', background: '#252538', borderRadius: '6px' }}>
+                  <div style={{ marginTop: '16px', padding: '12px', background: layout.backgroundColor || '#1a1a2e', borderRadius: '6px', border: '1px solid #333' }}>
                     <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Layout Properties</h4>
 
                     {/* Logo Upload */}
@@ -2191,16 +2191,23 @@ const SettingsPage = () => {
                       <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                         <input
                           type="color"
-                          value={layout.backgroundColor}
+                          value={layout.backgroundColor || '#1a1a2e'}
                           onChange={(e) => updateShowLayout(layoutIndex, 'backgroundColor', e.target.value)}
-                          style={{ width: '60px', height: '40px', cursor: 'pointer' }}
+                          style={{ width: '40px', height: '32px', cursor: 'pointer', padding: 0, border: '1px solid #444' }}
                         />
                         <input
                           type="text"
-                          value={layout.backgroundColor}
+                          value={layout.backgroundColor || '#1a1a2e'}
                           onChange={(e) => updateShowLayout(layoutIndex, 'backgroundColor', e.target.value)}
-                          style={{ flex: 1, fontFamily: 'monospace' }}
+                          style={{ width: '90px', fontFamily: 'monospace', fontSize: '13px' }}
                         />
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => updateShowLayout(layoutIndex, 'backgroundColor', '#1a1a2e')}
+                          style={{ padding: '6px 10px', fontSize: '12px' }}
+                        >
+                          Default
+                        </button>
                       </div>
                       <small>Main page background color</small>
                     </div>

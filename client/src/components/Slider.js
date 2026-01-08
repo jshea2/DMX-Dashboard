@@ -9,7 +9,7 @@ const Slider = ({
   onChange,
   unit = '%',
   color,
-  lookColors = [],       // Array of color strings: ['purple', 'orange']
+  lookContributors = [], // Array of { color: string, value: number } for weighted mixing
   isOverridden = false,  // Boolean: is this channel overridden?
   isFrozen = false,      // Boolean: is this channel frozen after recording?
   lookIntensity = 1,     // Float 0-1: highest look intensity controlling this channel
@@ -17,14 +17,54 @@ const Slider = ({
 }) => {
   const displayValue = unit === '°' ? Math.round(value) : Math.round(value);
 
-  // Intensity/white sliders get inline gradient style, RGB handled by CSS classes
+  // Color mapping for look colors and channel colors
+  const colorMap = {
+    purple: { r: 155, g: 74, b: 226 },
+    orange: { r: 226, g: 144, b: 74 },
+    cyan: { r: 74, g: 226, b: 226 },
+    pink: { r: 226, g: 74, b: 144 },
+    yellow: { r: 226, g: 226, b: 74 },
+    blue: { r: 74, g: 144, b: 226 },
+    red: { r: 226, g: 74, b: 74 },
+    green: { r: 74, g: 226, b: 74 },
+    intensity: { r: 255, g: 255, b: 170 },
+    white: { r: 255, g: 255, b: 255 }
+  };
+
+  // Colors that get the outline-to-fill thumb effect
+  const outlineFillColors = ['purple', 'orange', 'cyan', 'pink', 'yellow', 'blue', 'red', 'green', 'intensity', 'white'];
+  const hasOutlineFillThumb = outlineFillColors.includes(color);
+
+  // Get slider track gradient style
   const getSliderStyle = () => {
     if (color === 'white' || color === 'intensity') {
       return {
         background: `linear-gradient(to right, #222 0%, #fff 100%)`
       };
     }
+    // Sliders with outline-fill effect get gradient from black to their color
+    if (hasOutlineFillThumb && colorMap[color]) {
+      const rgb = colorMap[color];
+      return {
+        background: `linear-gradient(to right, #111 0%, rgb(${rgb.r}, ${rgb.g}, ${rgb.b}) 100%)`
+      };
+    }
     return {};
+  };
+
+  // Get thumb style for sliders with outline-fill effect (outline at 0%, solid at 100%)
+  const getLookThumbStyle = () => {
+    if (!hasOutlineFillThumb || !colorMap[color]) return {};
+    
+    const rgb = colorMap[color];
+    const intensity = value / max; // 0 to 1
+    
+    // At 0%: outline color, black center
+    // At 100%: solid color
+    return {
+      '--thumb-bg': `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${intensity})`,
+      '--thumb-border': `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`
+    };
   };
 
   // Map color names to CSS classes
@@ -42,23 +82,16 @@ const Slider = ({
       className += ' manual-value';
     }
 
+    // Add look-slider class for CSS variable thumb styling
+    if (hasOutlineFillThumb) {
+      className += ' look-slider';
+    }
+
     return className;
   };
 
   // Generate outline style for slider track based on look control
   const getTrackOutlineStyle = (opacity = 1) => {
-    // Color mapping for outlines
-    const colorMap = {
-      purple: '#9b4ae2',
-      orange: '#e2904a',
-      cyan: '#4ae2e2',
-      pink: '#e24a90',
-      yellow: '#e2e24a',
-      blue: '#4a90e2',
-      red: '#e24a4a',
-      green: '#4ae24a'
-    };
-
     if (isOverridden) {
       // Overridden: light grey outline
       return {
@@ -81,50 +114,34 @@ const Slider = ({
       };
     }
 
-    if (lookColors.length === 0) {
+    if (lookContributors.length === 0) {
       // No look control: no outline
       return {};
     }
 
-    if (lookColors.length === 1) {
-      // Single look: solid color outline with opacity
-      const hexColor = colorMap[lookColors[0]] || '#4a90e2';
-      // Convert hex to rgba with opacity
-      const r = parseInt(hexColor.slice(1, 3), 16);
-      const g = parseInt(hexColor.slice(3, 5), 16);
-      const b = parseInt(hexColor.slice(5, 7), 16);
-      return {
-        outline: `3px solid rgba(${r}, ${g}, ${b}, ${opacity})`,
-        outlineOffset: '2px',
-        borderRadius: '8px',
-        position: 'relative',
-        zIndex: 0
-      };
+    // Weighted color mixing based on each look's contribution value
+    let r = 0, g = 0, b = 0;
+    let totalWeight = 0;
+    lookContributors.forEach(contrib => {
+      const rgb = colorMap[contrib.color] || { r: 74, g: 144, b: 226 };
+      const weight = contrib.value || 1;
+      r += rgb.r * weight;
+      g += rgb.g * weight;
+      b += rgb.b * weight;
+      totalWeight += weight;
+    });
+    if (totalWeight > 0) {
+      r = Math.round(r / totalWeight);
+      g = Math.round(g / totalWeight);
+      b = Math.round(b / totalWeight);
     }
 
-    // Multiple looks: create striped outline using box-shadow
-    const boxShadows = [];
-    const stripeWidth = 3; // width of each color stripe in px
-
-    lookColors.forEach((c, index) => {
-      const hex = colorMap[c] || '#4a90e2';
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
-      const color = `rgba(${r}, ${g}, ${b}, ${opacity})`;
-
-      // Create box-shadow layers for striped effect
-      const offset = index * stripeWidth;
-      boxShadows.push(`0 0 0 ${offset + stripeWidth}px ${color}`);
-    });
-
     return {
-      outline: `${lookColors.length * stripeWidth}px solid transparent`,
+      outline: `3px solid rgba(${r}, ${g}, ${b}, ${opacity})`,
       outlineOffset: '2px',
       borderRadius: '8px',
       position: 'relative',
-      zIndex: 0,
-      boxShadow: boxShadows.join(', ')
+      zIndex: 0
     };
   };
 
@@ -149,6 +166,7 @@ const Slider = ({
         style={{
           ...getSliderStyle(),
           ...trackOutlineStyle,
+          ...getLookThumbStyle(),
           position: 'relative',
           zIndex: 1
         }}

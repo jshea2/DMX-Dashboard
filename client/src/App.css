@@ -129,6 +129,8 @@
   background: #4a90e2;
   cursor: pointer;
   transition: background 0.15s;
+  position: relative;
+  z-index: 10;
 }
 
 .slider::-moz-range-thumb {
@@ -139,6 +141,8 @@
   cursor: pointer;
   border: none;
   transition: background 0.15s;
+  position: relative;
+  z-index: 10;
 }
 
 .slider:active::-webkit-slider-thumb {
@@ -615,6 +619,19 @@
 
 .slider.yellow-slider::-moz-range-thumb {
   background: #e2e24a;
+}
+
+/* Look slider thumb with CSS variable - outline at 0%, solid at 100% */
+.slider.look-slider::-webkit-slider-thumb {
+  background: var(--thumb-bg, #4a90e2);
+  border: 3px solid var(--thumb-border, #4a90e2);
+  box-sizing: border-box;
+}
+
+.slider.look-slider::-moz-range-thumb {
+  background: var(--thumb-bg, #4a90e2);
+  border: 3px solid var(--thumb-border, #4a90e2);
+  box-sizing: border-box;
 }
 
 /* White outline for manually-adjusted channels */
