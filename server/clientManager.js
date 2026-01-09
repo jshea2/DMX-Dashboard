@@ -49,7 +49,8 @@ class ClientManager {
         firstSeen: now,
         lastSeen: now,
         lastIp: ip,
-        userAgent: userAgent
+        userAgent: userAgent,
+        dashboardAccess: {}  // NEW: Per-dashboard role assignments
       };
 
       currentConfig.clients.push(client);
@@ -60,6 +61,12 @@ class ClientManager {
       client.lastSeen = now;
       client.lastIp = ip;
       client.userAgent = userAgent;
+
+      // Migration: Add dashboardAccess if missing
+      if (!client.dashboardAccess) {
+        client.dashboardAccess = {};
+      }
+
       config.update(currentConfig);
     }
 
@@ -210,7 +217,7 @@ class ClientManager {
   }
 
   // Check if client has permission for an action
-  hasPermission(clientId, action = 'edit') {
+  hasPermission(clientId, action = 'edit', dashboardId = null) {
     const currentConfig = config.get();
     const client = currentConfig.clients.find(c => c.id === clientId);
 
@@ -218,19 +225,31 @@ class ClientManager {
       return false; // Unknown client
     }
 
+    // Determine which role to check (dashboard-specific or global)
+    let roleToCheck = client.role;
+
+    if (dashboardId && client.dashboardAccess && client.dashboardAccess[dashboardId]) {
+      // Use dashboard-specific role if available
+      roleToCheck = client.dashboardAccess[dashboardId];
+    }
+
     if (action === 'edit') {
       // Controller, moderator, and editor can edit lights/looks
-      return client.role === 'controller' || client.role === 'moderator' || client.role === 'editor';
+      return roleToCheck === 'controller' || roleToCheck === 'moderator' || roleToCheck === 'editor';
     }
 
     if (action === 'settings') {
-      // Only editor can access full settings
-      return client.role === 'editor';
+      // Only editor can access full settings (check if editor anywhere)
+      return this.isEditorAnywhere(clientId);
     }
 
     if (action === 'manageUsers') {
-      // Moderators and editors can manage users
-      return client.role === 'moderator' || client.role === 'editor';
+      if (dashboardId) {
+        // Check per-dashboard moderator/editor status
+        return roleToCheck === 'moderator' || roleToCheck === 'editor';
+      }
+      // For global user management, must be editor
+      return client.role === 'editor';
     }
 
     // Viewers can view
@@ -263,6 +282,183 @@ class ClientManager {
     this.setInactive(clientId);
 
     return true;
+  }
+
+  // ===== PER-DASHBOARD PERMISSION METHODS =====
+
+  // Get user's role for specific dashboard
+  getDashboardRole(clientId, dashboardId) {
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (!client) return 'viewer';
+
+    // Check per-dashboard role first
+    if (client.dashboardAccess && client.dashboardAccess[dashboardId]) {
+      return client.dashboardAccess[dashboardId];
+    }
+
+    // Fallback to global role
+    return client.role || 'viewer';
+  }
+
+  // Set user's role for specific dashboard
+  setDashboardRole(clientId, dashboardId, role) {
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (!client) return false;
+
+    // Initialize dashboardAccess if missing
+    if (!client.dashboardAccess) {
+      client.dashboardAccess = {};
+    }
+
+    client.dashboardAccess[dashboardId] = role;
+    config.update(currentConfig);
+
+    // Notify the client if they're connected
+    const connection = this.getActive(clientId);
+    if (connection && connection.ws) {
+      connection.ws.send(JSON.stringify({
+        type: 'dashboardRoleUpdate',
+        dashboardId: dashboardId,
+        role: role
+      }));
+    }
+
+    console.log(`Dashboard access updated: ${clientId.substring(0, 6)} → ${role} for dashboard ${dashboardId.substring(0, 8)}`);
+    return true;
+  }
+
+  // Remove user's access from specific dashboard
+  removeDashboardAccess(clientId, dashboardId) {
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (!client || !client.dashboardAccess) return false;
+
+    delete client.dashboardAccess[dashboardId];
+    config.update(currentConfig);
+
+    console.log(`Dashboard access removed: ${clientId.substring(0, 6)} from dashboard ${dashboardId.substring(0, 8)}`);
+    return true;
+  }
+
+  // Check if user can access a dashboard
+  canAccessDashboard(clientId, dashboardId, req = null) {
+    // Localhost can access everything
+    if (req && this.isLocalhost(req)) return true;
+
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (!client) return false;
+
+    // Check if user has explicit dashboard access
+    if (client.dashboardAccess && client.dashboardAccess[dashboardId]) {
+      return true;
+    }
+
+    // Check if dashboard allows fallback to global role
+    const layout = currentConfig.showLayouts?.find(l => l.id === dashboardId);
+    if (layout && layout.accessControl && !layout.accessControl.requireExplicitAccess) {
+      // Dashboard allows global role access
+      return true;
+    }
+
+    return false;
+  }
+
+  // Check if user is editor on ANY dashboard
+  isEditorAnywhere(clientId, req = null) {
+    // Localhost is always editor
+    if (req && this.isLocalhost(req)) return true;
+
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (!client) return false;
+
+    // Check global role
+    if (client.role === 'editor') return true;
+
+    // Check any dashboard role
+    if (client.dashboardAccess) {
+      return Object.values(client.dashboardAccess).includes('editor');
+    }
+
+    return false;
+  }
+
+  // Get all dashboards user has access to
+  getDashboardsForClient(clientId) {
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (!client) return [];
+
+    const dashboards = [];
+
+    // Add dashboards with explicit access
+    if (client.dashboardAccess) {
+      Object.keys(client.dashboardAccess).forEach(dashboardId => {
+        const layout = currentConfig.showLayouts?.find(l => l.id === dashboardId);
+        if (layout) {
+          dashboards.push({
+            id: layout.id,
+            name: layout.name,
+            urlSlug: layout.urlSlug,
+            role: client.dashboardAccess[dashboardId]
+          });
+        }
+      });
+    }
+
+    // Add dashboards that allow global role access
+    currentConfig.showLayouts?.forEach(layout => {
+      if (layout.accessControl && !layout.accessControl.requireExplicitAccess) {
+        // Check if not already added
+        if (!dashboards.find(d => d.id === layout.id)) {
+          dashboards.push({
+            id: layout.id,
+            name: layout.name,
+            urlSlug: layout.urlSlug,
+            role: client.role || 'viewer'
+          });
+        }
+      }
+    });
+
+    return dashboards;
+  }
+
+  // Get all clients with access to specific dashboard
+  getClientsForDashboard(dashboardId) {
+    const currentConfig = config.get();
+    const clients = currentConfig.clients || [];
+
+    return clients
+      .filter(client => {
+        // Check explicit dashboard access
+        if (client.dashboardAccess && client.dashboardAccess[dashboardId]) {
+          return true;
+        }
+
+        // Check if dashboard allows global role access
+        const layout = currentConfig.showLayouts?.find(l => l.id === dashboardId);
+        if (layout && layout.accessControl && !layout.accessControl.requireExplicitAccess) {
+          return true;
+        }
+
+        return false;
+      })
+      .map(client => ({
+        ...client,
+        isActive: this.isActive(client.id),
+        shortId: client.id.substring(0, 6).toUpperCase(),
+        dashboardRole: this.getDashboardRole(client.id, dashboardId)
+      }));
   }
 }
 
