@@ -185,13 +185,187 @@ app.post('/api/clients/:clientId/nickname', (req, res) => {
 });
 
 app.delete('/api/clients/:clientId', (req, res) => {
-  const { clientId } = req.params;
+  const { clientId} = req.params;
   const success = clientManager.removeClient(clientId);
   if (success) {
     broadcastActiveClients();
     res.json({ success: true });
   } else {
     res.status(404).json({ success: false, error: 'Client not found' });
+  }
+});
+
+// ===== DASHBOARD ACCESS API ENDPOINTS =====
+
+// Get all clients with access to specific dashboard
+app.get('/api/dashboards/:dashboardId/clients', (req, res) => {
+  const { dashboardId } = req.params;
+  const clients = clientManager.getClientsForDashboard(dashboardId);
+  res.json(clients);
+});
+
+// Set user's role for specific dashboard
+app.post('/api/dashboards/:dashboardId/clients/:clientId/role', (req, res) => {
+  const { dashboardId, clientId } = req.params;
+  const { role } = req.body;
+
+  // Validate role
+  if (!['viewer', 'controller', 'moderator', 'editor'].includes(role)) {
+    return res.status(400).json({ success: false, error: 'Invalid role' });
+  }
+
+  // Check if requester has permission to manage users for this dashboard
+  // TODO: Get requester's clientId from session/auth
+  // For now, skip permission check (will be added when we implement proper auth)
+
+  const success = clientManager.setDashboardRole(clientId, dashboardId, role);
+  if (success) {
+    broadcastActiveClients();
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, error: 'Client not found' });
+  }
+});
+
+// Remove user from dashboard
+app.delete('/api/dashboards/:dashboardId/clients/:clientId', (req, res) => {
+  const { dashboardId, clientId } = req.params;
+
+  // Check if requester has permission to manage users for this dashboard
+  // TODO: Get requester's clientId from session/auth
+
+  const success = clientManager.removeDashboardAccess(clientId, dashboardId);
+  if (success) {
+    broadcastActiveClients();
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, error: 'Client not found or no access to remove' });
+  }
+});
+
+// Get accessible dashboards for current client
+// Note: This endpoint will need client authentication to determine which client is making the request
+// For now, it returns all dashboards with their access control settings
+app.get('/api/dashboards/accessible', (req, res) => {
+  // TODO: Get clientId from session/auth
+  // For now, return all dashboards
+  const cfg = config.get();
+  const dashboards = (cfg.showLayouts || []).map(layout => ({
+    id: layout.id,
+    name: layout.name,
+    urlSlug: layout.urlSlug,
+    backgroundColor: layout.backgroundColor,
+    logo: layout.logo,
+    accessControl: layout.accessControl || { defaultRole: 'viewer', requireExplicitAccess: false }
+  }));
+
+  res.json(dashboards);
+});
+
+// Get global access matrix (all users x all dashboards)
+app.get('/api/access-matrix', (req, res) => {
+  // TODO: Check if requester is editor on any dashboard
+
+  const cfg = config.get();
+  const clients = clientManager.getAllClientsWithStatus();
+  const dashboards = (cfg.showLayouts || []).map(layout => ({
+    id: layout.id,
+    name: layout.name,
+    urlSlug: layout.urlSlug
+  }));
+
+  // Build matrix: { clientId: { dashboardId: role } }
+  const matrix = {};
+  clients.forEach(client => {
+    matrix[client.id] = {};
+    dashboards.forEach(dashboard => {
+      const role = clientManager.getDashboardRole(client.id, dashboard.id);
+      const hasAccess = clientManager.canAccessDashboard(client.id, dashboard.id);
+      matrix[client.id][dashboard.id] = hasAccess ? role : null;
+    });
+  });
+
+  res.json({ clients, dashboards, matrix });
+});
+
+// ===== DASHBOARD MANAGEMENT API ENDPOINTS =====
+
+// Update dashboard access control settings
+app.post('/api/dashboards/:dashboardId/access-settings', (req, res) => {
+  const { dashboardId } = req.params;
+  const { defaultRole, requireExplicitAccess } = req.body;
+
+  // TODO: Check if requester is editor for this dashboard
+
+  const cfg = config.get();
+  const layout = cfg.showLayouts?.find(l => l.id === dashboardId);
+
+  if (!layout) {
+    return res.status(404).json({ success: false, error: 'Dashboard not found' });
+  }
+
+  // Validate defaultRole if provided
+  if (defaultRole !== undefined && !['viewer', 'controller', 'moderator', 'editor'].includes(defaultRole)) {
+    return res.status(400).json({ success: false, error: 'Invalid defaultRole' });
+  }
+
+  // Update access control settings
+  if (!layout.accessControl) {
+    layout.accessControl = {};
+  }
+
+  if (defaultRole !== undefined) {
+    layout.accessControl.defaultRole = defaultRole;
+  }
+
+  if (requireExplicitAccess !== undefined) {
+    layout.accessControl.requireExplicitAccess = requireExplicitAccess;
+  }
+
+  const success = config.update(cfg);
+  if (success) {
+    res.json({ success: true, accessControl: layout.accessControl });
+  } else {
+    res.status(500).json({ success: false, error: 'Failed to update access settings' });
+  }
+});
+
+// Update dashboard visibility/UI settings
+app.post('/api/dashboards/:dashboardId/settings', (req, res) => {
+  const { dashboardId } = req.params;
+  const { showReturnToMenuButton, showSettingsButton, showConnectedUsers, showBlackoutButton } = req.body;
+
+  // TODO: Check if requester is editor for this dashboard
+
+  const cfg = config.get();
+  const layout = cfg.showLayouts?.find(l => l.id === dashboardId);
+
+  if (!layout) {
+    return res.status(404).json({ success: false, error: 'Dashboard not found' });
+  }
+
+  // Update visibility settings
+  if (showReturnToMenuButton !== undefined) {
+    layout.showReturnToMenuButton = showReturnToMenuButton;
+  }
+
+  if (showSettingsButton !== undefined) {
+    layout.showSettingsButton = showSettingsButton;
+  }
+
+  if (showConnectedUsers !== undefined) {
+    layout.showConnectedUsers = showConnectedUsers;
+  }
+
+  if (showBlackoutButton !== undefined) {
+    layout.showBlackoutButton = showBlackoutButton;
+  }
+
+  const success = config.update(cfg);
+  if (success) {
+    res.json({ success: true, layout });
+  } else {
+    res.status(500).json({ success: false, error: 'Failed to update dashboard settings' });
   }
 });
 
@@ -270,7 +444,9 @@ wss.on('connection', (ws, req) => {
           type: 'authResult',
           role: clientRole,
           clientId: clientId,
-          shortId: clientId.substring(0, 6).toUpperCase()
+          shortId: clientId.substring(0, 6).toUpperCase(),
+          dashboardAccess: client.dashboardAccess || {},  // NEW: Per-dashboard role assignments
+          isEditorAnywhere: clientManager.isEditorAnywhere(clientId)  // NEW: Check if editor on any dashboard
         }));
 
         console.log(`Client authenticated: ${clientId.substring(0, 6)} as ${clientRole}`);

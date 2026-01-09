@@ -149,6 +149,8 @@ class Config {
         let config = JSON.parse(data);
         // Migrate to showLayouts if not present
         config = this.ensureShowLayouts(config);
+        // Migrate layout access control fields
+        config = this.ensureLayoutAccessControl(config);
         return config;
       }
     } catch (error) {
@@ -156,6 +158,7 @@ class Config {
     }
     let config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
     config = this.ensureShowLayouts(config);
+    config = this.ensureLayoutAccessControl(config);
     return config;
   }
 
@@ -297,6 +300,41 @@ class Config {
     // Ensure there's an active layout set
     if (!config.activeLayoutId && config.showLayouts.length > 0) {
       config.activeLayoutId = config.showLayouts[0].id;
+    }
+
+    return config;
+  }
+
+  ensureLayoutAccessControl(config) {
+    // Migrate layouts to include access control fields for multi-dashboard system
+    if (config.showLayouts) {
+      config.showLayouts.forEach(layout => {
+        // Add showReturnToMenuButton (default: true)
+        if (layout.showReturnToMenuButton === undefined) {
+          layout.showReturnToMenuButton = true;
+        }
+
+        // Add showSettingsButton if missing (default: true)
+        if (layout.showSettingsButton === undefined) {
+          layout.showSettingsButton = true;
+        }
+
+        // Add accessControl object
+        if (!layout.accessControl) {
+          layout.accessControl = {
+            defaultRole: 'viewer',           // Role for new users added to this dashboard
+            requireExplicitAccess: false     // If false, all users can access (uses global role)
+          };
+        } else {
+          // Ensure both fields exist in accessControl
+          if (layout.accessControl.defaultRole === undefined) {
+            layout.accessControl.defaultRole = 'viewer';
+          }
+          if (layout.accessControl.requireExplicitAccess === undefined) {
+            layout.accessControl.requireExplicitAccess = false;
+          }
+        }
+      });
     }
 
     return config;
