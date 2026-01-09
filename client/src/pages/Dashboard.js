@@ -137,7 +137,7 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
 const Dashboard = () => {
   const navigate = useNavigate();
   const { urlSlug } = useParams();
-  const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients } = useWebSocket();
+  const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients, getDashboardRole, isEditorAnywhere } = useWebSocket();
   const [config, setConfig] = useState(null);
   const [activeLayout, setActiveLayout] = useState(null);
   const [recordingLook, setRecordingLook] = useState(null);
@@ -145,6 +145,7 @@ const Dashboard = () => {
   const [manuallyAdjusted, setManuallyAdjusted] = useState({});  // Tracks channels manually touched
   const [frozenChannels, setFrozenChannels] = useState({});  // Tracks frozen values after recording {key: frozenValue}
   const [accessDenied, setAccessDenied] = useState(false);
+  const [dashboardRole, setDashboardRole] = useState('viewer');
 
   // Compute HTP metadata
   const { metadata: htpMetadata, channelsToRelease } = useHTPMetadata(state, config, channelOverrides, frozenChannels);
@@ -194,9 +195,24 @@ const Dashboard = () => {
           return;
         }
 
-        // Check if user has access to this dashboard
-        // For now, we'll allow access and implement proper check in Phase 6
-        // TODO: Implement access check using dashboardAccess from WebSocket
+        // Get user's role for this specific dashboard
+        const userDashboardRole = getDashboardRole ? getDashboardRole(layout.id) : role;
+        setDashboardRole(userDashboardRole);
+
+        // Check access based on dashboard's access control settings
+        const accessControl = layout.accessControl || { requireExplicitAccess: false };
+
+        // If dashboard requires explicit access, check if user has dashboard-specific role
+        if (accessControl.requireExplicitAccess && getDashboardRole) {
+          const hasExplicitAccess = getDashboardRole(layout.id) !== role; // Has dashboard-specific role
+          if (!hasExplicitAccess && role === 'viewer') {
+            console.warn(`Access denied: Dashboard '${layout.name}' requires explicit access`);
+            alert(`You don't have access to this dashboard. Please request access from an administrator.`);
+            setAccessDenied(true);
+            navigate('/dashboard', { replace: true });
+            return;
+          }
+        }
 
         setActiveLayout(layout);
       } catch (err) {
@@ -208,7 +224,7 @@ const Dashboard = () => {
     if (urlSlug) {
       fetchConfigData();
     }
-  }, [urlSlug, navigate]);
+  }, [urlSlug, navigate, getDashboardRole, role]);
 
   // Apply background color to body element for full-width background
   useEffect(() => {
@@ -752,13 +768,13 @@ const Dashboard = () => {
         </button>
       )}
 
-      {activeLayout.showSettingsButton !== false && role === 'editor' && (
+      {activeLayout.showSettingsButton !== false && isEditorAnywhere && (
         <button className="settings-btn" onClick={() => navigate('/settings')}>
           ⚙
         </button>
       )}
 
-      {role === 'moderator' && (
+      {!isEditorAnywhere && (dashboardRole === 'moderator' || role === 'moderator') && (
         <button className="settings-btn" onClick={() => navigate('/settings?tab=users')} title="Users and Access">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>

@@ -1271,11 +1271,21 @@ const SettingsPage = () => {
           alignSelf: 'flex-start'
         }}>
           {TABS.filter(tab => {
-            // Moderators can only see Users and Access tab
-            if (role === 'moderator') {
+            // Editors (anywhere) see all tabs
+            if (isEditorAnywhere) {
+              return true;
+            }
+
+            // Moderators (on any dashboard) can only see Users and Access tab
+            const isModeratorAnywhere = role === 'moderator' ||
+              (dashboardAccess && Object.values(dashboardAccess).some(r => r === 'moderator' || r === 'editor'));
+
+            if (isModeratorAnywhere && !isEditorAnywhere) {
               return tab.id === 'users';
             }
-            return true; // Show all tabs for editors and other roles
+
+            // Viewers/controllers see no settings tabs
+            return false;
           }).map(tab => (
             <button
               key={tab.id}
@@ -1452,12 +1462,23 @@ const SettingsPage = () => {
                 cursor: 'pointer'
               }}
             >
-              <option value="global">Global Access Matrix</option>
-              {config?.showLayouts?.map((layout) => (
-                <option key={layout.id} value={layout.id}>
-                  {layout.name}
-                </option>
-              ))}
+              {/* Global matrix only for editors */}
+              {isEditorAnywhere && <option value="global">Global Access Matrix</option>}
+
+              {/* Show only dashboards user can moderate/edit */}
+              {config?.showLayouts?.map((layout) => {
+                const dashboardRole = dashboardAccess?.[layout.id] || role;
+                const canModerate = isEditorAnywhere || dashboardRole === 'moderator' || dashboardRole === 'editor';
+
+                if (canModerate) {
+                  return (
+                    <option key={layout.id} value={layout.id}>
+                      {layout.name}
+                    </option>
+                  );
+                }
+                return null;
+              })}
             </select>
             <small>
               {selectedDashboard === 'global'
