@@ -30,7 +30,7 @@ const TABS = [
 const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { activeClients, role } = useWebSocket();
+  const { activeClients, role, isEditorAnywhere, dashboardAccess } = useWebSocket();
   const [config, setConfig] = useState(null);
   const [originalConfig, setOriginalConfig] = useState(null);  // Track original for comparison
   const [saved, setSaved] = useState(false);
@@ -39,6 +39,7 @@ const SettingsPage = () => {
   const [pendingNavigation, setPendingNavigation] = useState(null);
   const [networkInterfaces, setNetworkInterfaces] = useState([]);
   const [draggedItem, setDraggedItem] = useState(null);
+  const [selectedDashboard, setSelectedDashboard] = useState('global'); // 'global' or dashboardId
 
   // Check URL query params for initial tab, or use last visited tab from localStorage
   const queryParams = new URLSearchParams(location.search);
@@ -1023,9 +1024,15 @@ const SettingsPage = () => {
     }
   };
 
-  const getQRCodeURL = (interfaceAddress) => {
+  const getQRCodeURL = (interfaceAddress, dashboardSlug = null) => {
     const port = window.location.port || 3000;
-    return `http://${interfaceAddress}:${port}`;
+    let url = `http://${interfaceAddress}:${port}`;
+
+    if (dashboardSlug) {
+      url += `/dashboard/${dashboardSlug}`;
+    }
+
+    return url;
   };
 
   // === LOOK FUNCTIONS ===
@@ -1428,14 +1435,152 @@ const SettingsPage = () => {
       {/* Users and Access Tab */}
       {activeTab === 'users' && (
       <div className="card">
-        <div className="settings-section">
-          <h3
-            onClick={() => toggleSection('server')}
-            style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
-          >
-            <span style={{ transition: 'transform 0.2s', transform: collapsedSections.server ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
-            Network Access QR Codes
-          </h3>
+        {/* Dashboard Selector */}
+        <div className="settings-section" style={{ marginBottom: '24px' }}>
+          <h3 style={{ marginBottom: '12px' }}>Select Dashboard</h3>
+          <div className="form-group">
+            <select
+              value={selectedDashboard}
+              onChange={(e) => setSelectedDashboard(e.target.value)}
+              style={{
+                padding: '12px',
+                fontSize: '14px',
+                background: '#1a1a2e',
+                color: '#f0f0f0',
+                border: '2px solid #4a90e2',
+                borderRadius: '8px',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="global">Global Access Matrix</option>
+              {config?.showLayouts?.map((layout) => (
+                <option key={layout.id} value={layout.id}>
+                  {layout.name}
+                </option>
+              ))}
+            </select>
+            <small>
+              {selectedDashboard === 'global'
+                ? 'View and manage user access across all dashboards'
+                : 'Manage users and settings for this specific dashboard'}
+            </small>
+          </div>
+        </div>
+
+        {/* Global Access Matrix View */}
+        {selectedDashboard === 'global' && (
+          <div className="settings-section">
+            <h3 style={{ marginBottom: '16px' }}>Global Access Matrix</h3>
+            <p style={{ fontSize: '13px', color: '#888', marginBottom: '16px' }}>
+              View and manage user access across all dashboards. Click a cell to change a user's role for that dashboard.
+            </p>
+
+            {(!config?.clients || config.clients.length === 0) && (
+              <p style={{ fontSize: '13px', color: '#666', fontStyle: 'italic', padding: '16px', background: '#1a1a2e', borderRadius: '6px' }}>
+                No clients have connected yet. The matrix will appear here when clients connect.
+              </p>
+            )}
+
+            {config?.clients && config.clients.length > 0 && config?.showLayouts && config.showLayouts.length > 0 && (
+              <div style={{ overflowX: 'auto', marginTop: '16px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
+                  <thead>
+                    <tr style={{ background: '#1a1a2e' }}>
+                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #333', position: 'sticky', left: 0, background: '#1a1a2e', zIndex: 2 }}>
+                        Client
+                      </th>
+                      {config.showLayouts.map((layout) => (
+                        <th key={layout.id} style={{ padding: '12px', textAlign: 'center', borderBottom: '2px solid #333', minWidth: '100px' }}>
+                          {layout.name}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {config.clients.map((client) => {
+                      const shortId = client.id.substring(0, 6).toUpperCase();
+                      const isActive = activeClients.some(ac => ac.id === client.id);
+
+                      return (
+                        <tr key={client.id} style={{ borderBottom: '1px solid #2a2a2a' }}>
+                          <td style={{ padding: '12px', position: 'sticky', left: 0, background: '#16213e', borderRight: '2px solid #333' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div
+                                style={{
+                                  width: '8px',
+                                  height: '8px',
+                                  borderRadius: '50%',
+                                  background: isActive ? '#4ae24a' : '#666',
+                                  flexShrink: 0
+                                }}
+                              />
+                              <span style={{ fontWeight: '600' }}>{client.nickname || shortId}</span>
+                            </div>
+                          </td>
+                          {config.showLayouts.map((layout) => {
+                            const dashboardRole = client.dashboardAccess?.[layout.id] || client.role || 'viewer';
+                            const roleColors = {
+                              editor: { bg: '#2a4a2a', color: '#4ae24a', label: 'E' },
+                              moderator: { bg: '#4a2a4a', color: '#e24ae2', label: 'M' },
+                              controller: { bg: '#4a3a2a', color: '#e2904a', label: 'C' },
+                              viewer: { bg: '#2a2a4a', color: '#4a90e2', label: 'V' }
+                            };
+                            const roleStyle = roleColors[dashboardRole] || roleColors.viewer;
+
+                            return (
+                              <td key={layout.id} style={{ padding: '8px', textAlign: 'center' }}>
+                                <select
+                                  value={dashboardRole}
+                                  onChange={(e) => {
+                                    fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ role: e.target.value })
+                                    })
+                                      .then(res => res.json())
+                                      .then(() => fetchConfig())
+                                      .catch(err => console.error('Failed to update role:', err));
+                                  }}
+                                  style={{
+                                    padding: '6px 8px',
+                                    fontSize: '11px',
+                                    fontWeight: '600',
+                                    background: roleStyle.bg,
+                                    color: roleStyle.color,
+                                    border: `1px solid ${roleStyle.color}`,
+                                    borderRadius: '4px',
+                                    cursor: 'pointer',
+                                    width: '100%'
+                                  }}
+                                >
+                                  <option value="viewer">Viewer</option>
+                                  <option value="controller">Controller</option>
+                                  <option value="moderator">Moderator</option>
+                                  <option value="editor">Editor</option>
+                                </select>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Conditional rendering based on selection */}
+        {selectedDashboard !== 'global' && (
+          <div className="settings-section">
+            <h3
+              onClick={() => toggleSection('server')}
+              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+            >
+              <span style={{ transition: 'transform 0.2s', transform: collapsedSections.server ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▼</span>
+              Network Access QR Codes
+            </h3>
 
           {!collapsedSections.server && (
             <>
@@ -1499,13 +1644,13 @@ const SettingsPage = () => {
                       }}
                     >
                       <QRCodeCanvas
-                        value={getQRCodeURL(iface.address)}
+                        value={getQRCodeURL(iface.address, config.showLayouts?.find(l => l.id === selectedDashboard)?.urlSlug)}
                         size={150}
                         level="M"
                       />
                     </div>
                     <p style={{ fontSize: '12px', color: '#888', marginBottom: '12px', fontFamily: 'monospace' }}>
-                      {getQRCodeURL(iface.address)}
+                      {getQRCodeURL(iface.address, config.showLayouts?.find(l => l.id === selectedDashboard)?.urlSlug)}
                     </p>
                     <button
                       onClick={() => downloadQRCode(iface.address)}
@@ -1530,9 +1675,10 @@ const SettingsPage = () => {
             </>
           )}
         </div>
+        )}
 
         {/* Client Access Control - Hidden for moderators */}
-        {role === 'editor' && (
+        {selectedDashboard !== 'global' && role === 'editor' && (
         <div className="settings-section">
           <h3
             onClick={() => toggleSection('webServer')}
