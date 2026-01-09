@@ -22,6 +22,8 @@ const useWebSocket = () => {
   const [shortId, setShortId] = useState('');
   const [activeClients, setActiveClients] = useState([]);
   const [showConnectedUsers, setShowConnectedUsers] = useState(true);
+  const [dashboardAccess, setDashboardAccess] = useState({}); // Per-dashboard role assignments
+  const [isEditorAnywhere, setIsEditorAnywhere] = useState(false); // True if editor on any dashboard
 
   const ws = useRef(null);
   const reconnectTimeout = useRef(null);
@@ -58,7 +60,15 @@ const useWebSocket = () => {
           authenticated.current = true;
           setRole(message.role);
           setShortId(message.shortId);
+          setDashboardAccess(message.dashboardAccess || {});
+          setIsEditorAnywhere(message.isEditorAnywhere || false);
           console.log(`Authenticated as ${message.role} (${message.shortId})`);
+        } else if (message.type === 'dashboardRoleUpdate') {
+          console.log(`[WebSocket] Dashboard role update: ${message.role} for dashboard ${message.dashboardId}`);
+          setDashboardAccess(prev => ({
+            ...prev,
+            [message.dashboardId]: message.role
+          }));
         } else if (message.type === 'roleUpdate') {
           console.log(`[WebSocket] Role update received: ${message.role}`);
           setRole(message.role);
@@ -127,6 +137,11 @@ const useWebSocket = () => {
     }
   }, []);
 
+  const getDashboardRole = useCallback((dashboardId) => {
+    // Return dashboard-specific role if available, otherwise fall back to global role
+    return dashboardAccess[dashboardId] || role || 'viewer';
+  }, [dashboardAccess, role]);
+
   return {
     state,
     sendUpdate,
@@ -135,7 +150,10 @@ const useWebSocket = () => {
     shortId,
     requestAccess,
     activeClients,
-    showConnectedUsers
+    showConnectedUsers,
+    dashboardAccess,
+    isEditorAnywhere,
+    getDashboardRole
   };
 };
 

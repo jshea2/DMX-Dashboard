@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import useWebSocket from '../hooks/useWebSocket';
 import Slider from '../components/Slider';
 import ConnectedUsers from '../components/ConnectedUsers';
@@ -136,6 +136,7 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
 
 const Dashboard = () => {
   const navigate = useNavigate();
+  const { urlSlug } = useParams();
   const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients } = useWebSocket();
   const [config, setConfig] = useState(null);
   const [activeLayout, setActiveLayout] = useState(null);
@@ -143,6 +144,7 @@ const Dashboard = () => {
   const [channelOverrides, setChannelOverrides] = useState({});
   const [manuallyAdjusted, setManuallyAdjusted] = useState({});  // Tracks channels manually touched
   const [frozenChannels, setFrozenChannels] = useState({});  // Tracks frozen values after recording {key: frozenValue}
+  const [accessDenied, setAccessDenied] = useState(false);
 
   // Compute HTP metadata
   const { metadata: htpMetadata, channelsToRelease } = useHTPMetadata(state, config, channelOverrides, frozenChannels);
@@ -174,48 +176,39 @@ const Dashboard = () => {
   }, [channelsToRelease, sendUpdate]);
 
   useEffect(() => {
-    const fetchConfigData = () => {
-      // Fetch config to get layout and other data
-      fetch('/api/config')
-        .then(res => res.json())
-        .then(data => {
-          setConfig(data);
+    const fetchConfigData = async () => {
+      try {
+        // Fetch config to get layout and other data
+        const configRes = await fetch('/api/config');
+        const data = await configRes.json();
+        setConfig(data);
 
-          // Find active layout by activeLayoutId or fall back to first layout
-          let layout;
-          if (data.activeLayoutId) {
-            layout = data.showLayouts?.find(l => l.id === data.activeLayoutId);
-          }
-          // If no active layout set or not found, use first available layout
-          if (!layout && data.showLayouts?.length > 0) {
-            layout = data.showLayouts[0];
-            // Set it as active layout on server
-            fetch('/api/config/active-layout', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ activeLayoutId: layout.id })
-            }).catch(err => console.error('Failed to set active layout:', err));
-          }
-          // Fallback to creating a default layout if none found
-          if (!layout) {
-            layout = {
-              id: 'default',
-              name: 'Default Layout',
-              showName: false,
-              backgroundColor: '#1a1a2e',
-              showBlackoutButton: true,
-              showLayoutSelector: true,
-              showSettingsButton: true,
-              sections: []
-            };
-          }
-          setActiveLayout(layout);
-        })
-        .catch(err => console.error('Failed to fetch config:', err));
+        // Find layout by urlSlug
+        let layout = data.showLayouts?.find(l => l.urlSlug === urlSlug);
+
+        if (!layout) {
+          // Dashboard not found - redirect to menu
+          console.error(`Dashboard with slug '${urlSlug}' not found`);
+          setAccessDenied(true);
+          navigate('/dashboard', { replace: true });
+          return;
+        }
+
+        // Check if user has access to this dashboard
+        // For now, we'll allow access and implement proper check in Phase 6
+        // TODO: Implement access check using dashboardAccess from WebSocket
+
+        setActiveLayout(layout);
+      } catch (err) {
+        console.error('Failed to fetch config:', err);
+        setAccessDenied(true);
+      }
     };
 
-    fetchConfigData();
-  }, [role]);
+    if (urlSlug) {
+      fetchConfigData();
+    }
+  }, [urlSlug, navigate]);
 
   // Apply background color to body element for full-width background
   useEffect(() => {
@@ -752,6 +745,12 @@ const Dashboard = () => {
           </div>
         );
       })}
+
+      {activeLayout.showReturnToMenuButton !== false && (
+        <button className="menu-btn" onClick={() => navigate('/dashboard')} title="Return to Menu">
+          ☰
+        </button>
+      )}
 
       {activeLayout.showSettingsButton !== false && role === 'editor' && (
         <button className="settings-btn" onClick={() => navigate('/settings')}>

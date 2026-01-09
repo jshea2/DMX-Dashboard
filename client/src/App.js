@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Dashboard from './pages/Dashboard';
+import DashboardMenu from './pages/DashboardMenu';
 import SettingsPage from './pages/SettingsPage';
 import DmxOutputPage from './pages/DmxOutputPage';
 import AccessRequestNotification from './components/AccessRequestNotification';
@@ -61,7 +62,8 @@ function App() {
       />
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<Dashboard />} />
+        <Route path="/dashboard" element={<DashboardMenu />} />
+        <Route path="/dashboard/:urlSlug" element={<Dashboard />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/dmx-output" element={<DmxOutputPage />} />
       </Routes>
