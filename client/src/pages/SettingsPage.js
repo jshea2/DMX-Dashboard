@@ -50,29 +50,133 @@ const SettingsPage = () => {
   const [collapsedSections, setCollapsedSections] = useState({});
   const [collapsedProfiles, setCollapsedProfiles] = useState({});
   const [collapsedFixtures, setCollapsedFixtures] = useState({});
+  const [fromDashboardName, setFromDashboardName] = useState(null);
   const [collapsedLayouts, setCollapsedLayouts] = useState({});
   const [patchViewerUniverse, setPatchViewerUniverse] = useState(1);
   const [dmxData, setDmxData] = useState({});
   const [draggingFixture, setDraggingFixture] = useState(null);
+  const [draggingControlIndex, setDraggingControlIndex] = useState(null);
   const [showDuplicateModal, setShowDuplicateModal] = useState(false);
   const [duplicateFixtureIndex, setDuplicateFixtureIndex] = useState(null);
   const [duplicateCount, setDuplicateCount] = useState(1);
   const [duplicateAddressOffset, setDuplicateAddressOffset] = useState(0);
 
+  // Tagging and filtering state
+  const [fixtureTagFilter, setFixtureTagFilter] = useState('all');
+  const [fixtureDashboardFilter, setFixtureDashboardFilter] = useState('all');
+  const [showUnassignedFixtures, setShowUnassignedFixtures] = useState(false);
+  const [lookDashboardFilter, setLookDashboardFilter] = useState('all');
+  const [showUnassignedLooks, setShowUnassignedLooks] = useState(false);
+
   const toggleSection = (section) => {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
+
+  // Computed values for fixture tagging and filtering
+  const allFixtureTags = React.useMemo(() => {
+    if (!config?.fixtures) return [];
+    const tags = new Set();
+    config.fixtures.forEach(f => f.tags?.forEach(t => tags.add(t)));
+    return Array.from(tags).sort();
+  }, [config?.fixtures]);
+
+  // Get dashboard assignments for fixtures
+  const getFixtureDashboards = React.useCallback((fixtureId) => {
+    if (!config?.showLayouts) return [];
+    return config.showLayouts.filter(layout =>
+      layout.sections?.some(section =>
+        section.items?.some(item =>
+          item.type === 'fixture' && item.id === fixtureId
+        )
+      )
+    );
+  }, [config?.showLayouts]);
+
+  const filteredFixtures = React.useMemo(() => {
+    if (!config?.fixtures) return [];
+    let result = config.fixtures;
+
+    // Custom tag filter
+    if (fixtureTagFilter && fixtureTagFilter !== 'all') {
+      result = result.filter(f => f.tags?.includes(fixtureTagFilter));
+    }
+
+    // Dashboard filter
+    if (fixtureDashboardFilter && fixtureDashboardFilter !== 'all') {
+      result = result.filter(fixture => {
+        const dashboards = getFixtureDashboards(fixture.id);
+        return dashboards.some(d => d.id === fixtureDashboardFilter);
+      });
+    }
+
+    // Unassigned filter
+    if (showUnassignedFixtures) {
+      result = result.filter(fixture => {
+        const dashboards = getFixtureDashboards(fixture.id);
+        return dashboards.length === 0;
+      });
+    }
+
+    return result;
+  }, [config?.fixtures, fixtureTagFilter, fixtureDashboardFilter, showUnassignedFixtures, getFixtureDashboards]);
+
+  // Get dashboard assignments for looks
+  const getLookDashboards = React.useCallback((lookId) => {
+    if (!config?.showLayouts) return [];
+    return config.showLayouts.filter(layout =>
+      layout.sections?.some(section =>
+        section.items?.some(item =>
+          item.type === 'look' && item.id === lookId
+        )
+      )
+    );
+  }, [config?.showLayouts]);
+
+  const filteredLooks = React.useMemo(() => {
+    if (!config?.looks) return [];
+    let result = config.looks;
+
+    // Dashboard filter
+    if (lookDashboardFilter && lookDashboardFilter !== 'all') {
+      result = result.filter(look => {
+        const dashboards = getLookDashboards(look.id);
+        return dashboards.some(d => d.id === lookDashboardFilter);
+      });
+    }
+
+    // Unassigned filter
+    if (showUnassignedLooks) {
+      result = result.filter(look => {
+        const dashboards = getLookDashboards(look.id);
+        return dashboards.length === 0;
+      });
+    }
+
+    return result;
+  }, [config?.looks, lookDashboardFilter, showUnassignedLooks, getLookDashboards]);
 
   useEffect(() => {
     fetchConfig();
     fetchNetworkInterfaces();
   }, []);
 
-  // Refetch config when active clients change (to update client list and pending requests)
+  // Separate useEffect to update fromDashboardName when config loads
   useEffect(() => {
-    if (activeClients.length > 0) {
+    if (location.state?.fromDashboard && config?.showLayouts) {
+      const dashboard = config.showLayouts.find(d => d.urlSlug === location.state.fromDashboard);
+      if (dashboard) {
+        setFromDashboardName(dashboard.name);
+      }
+    }
+  }, [location.state?.fromDashboard, config?.showLayouts]);
+
+  // Refetch config when active clients change (to update client list and pending requests)
+  // BUT only if we don't have unsaved changes (to avoid overwriting local edits)
+  useEffect(() => {
+    if (activeClients.length > 0 && !hasUnsavedChanges) {
       fetchConfig();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeClients]);
 
   // Watch for URL changes and update active tab
@@ -135,34 +239,64 @@ const SettingsPage = () => {
     fetch('/api/config')
       .then(res => res.json())
       .then(data => {
+        // Ensure data has required structure
+        if (!data) {
+          console.error('[SettingsPage] Config fetch returned null/undefined');
+          return;
+        }
+        if (!data.fixtureProfiles) {
+          console.error('[SettingsPage] Config missing fixtureProfiles');
+          data.fixtureProfiles = [];
+        }
+        if (!data.fixtures) {
+          console.error('[SettingsPage] Config missing fixtures');
+          data.fixtures = [];
+        }
+
         setConfig(data);
         setOriginalConfig(JSON.stringify(data));
         setHasUnsavedChanges(false);
 
-        // Set all items to collapsed by default
-        const profilesCollapsed = {};
-        data.fixtureProfiles?.forEach(profile => {
-          profilesCollapsed[profile.id] = true;
+        // Preserve existing collapsed states, only add new items as collapsed
+        setCollapsedProfiles(prev => {
+          const updated = { ...prev };
+          data.fixtureProfiles?.forEach(profile => {
+            if (!(profile.id in updated)) {
+              updated[profile.id] = true; // Only collapse new items
+            }
+          });
+          return updated;
         });
-        setCollapsedProfiles(profilesCollapsed);
 
-        const fixturesCollapsed = {};
-        data.fixtures?.forEach(fixture => {
-          fixturesCollapsed[fixture.id] = true;
+        setCollapsedFixtures(prev => {
+          const updated = { ...prev };
+          data.fixtures?.forEach(fixture => {
+            if (!(fixture.id in updated)) {
+              updated[fixture.id] = true;
+            }
+          });
+          return updated;
         });
-        setCollapsedFixtures(fixturesCollapsed);
 
-        const layoutsCollapsed = {};
-        data.showLayouts?.forEach(layout => {
-          layoutsCollapsed[layout.id] = true;
+        setCollapsedLayouts(prev => {
+          const updated = { ...prev };
+          data.showLayouts?.forEach(layout => {
+            if (!(layout.id in updated)) {
+              updated[layout.id] = true;
+            }
+          });
+          return updated;
         });
-        setCollapsedLayouts(layoutsCollapsed);
 
-        const looksCollapsed = {};
-        data.looks?.forEach(look => {
-          looksCollapsed[look.id] = true;
+        setCollapsedSections(prev => {
+          const updated = { ...prev };
+          data.looks?.forEach(look => {
+            if (!(look.id in updated)) {
+              updated[look.id] = true;
+            }
+          });
+          return updated;
         });
-        setCollapsedSections(looksCollapsed);
 
         // Set patch viewer universe to the first fixture's universe
         if (data.fixtures?.length > 0) {
@@ -265,7 +399,8 @@ const SettingsPage = () => {
 
   const updateFixture = (index, field, value) => {
     const newConfig = { ...config };
-    newConfig.fixtures[index][field] = value;
+    newConfig.fixtures = [...config.fixtures];
+    newConfig.fixtures[index] = { ...newConfig.fixtures[index], [field]: value };
     setConfig(newConfig);
   };
 
@@ -507,7 +642,153 @@ const SettingsPage = () => {
     setConfig(newConfig);
   };
 
+  // === CONTROL BLOCK FUNCTIONS ===
+  const CONTROL_BLOCK_TYPES = {
+    'Intensity': {
+      label: 'Dimmer (1ch)',
+      domain: 'Intensity',
+      controlType: 'Intensity',
+      channelCount: 1,
+      components: [
+        { type: 'intensity', name: 'intensity', offset: 0 }
+      ],
+      defaultValue: { type: 'scalar', v: 0.0 }
+    },
+    'RGB': {
+      label: 'RGB Color (3ch)',
+      domain: 'Color',
+      controlType: 'RGB',
+      channelCount: 3,
+      components: [
+        { type: 'red', name: 'red', offset: 0 },
+        { type: 'green', name: 'green', offset: 1 },
+        { type: 'blue', name: 'blue', offset: 2 }
+      ],
+      defaultValue: { type: 'rgb', r: 1.0, g: 1.0, b: 1.0 }
+    },
+    'RGBW': {
+      label: 'RGBW Color (4ch)',
+      domain: 'Color',
+      controlType: 'RGBW',
+      channelCount: 4,
+      components: [
+        { type: 'red', name: 'red', offset: 0 },
+        { type: 'green', name: 'green', offset: 1 },
+        { type: 'blue', name: 'blue', offset: 2 },
+        { type: 'white', name: 'white', offset: 3 }
+      ],
+      defaultValue: { type: 'rgbw', r: 1.0, g: 1.0, b: 1.0, w: 1.0 }
+    },
+    'Generic': {
+      label: 'Generic (1ch)',
+      domain: 'Other',
+      controlType: 'Generic',
+      channelCount: 1,
+      components: [
+        { type: 'generic', name: '', offset: 0 }  // Name must be filled by user
+      ],
+      defaultValue: null
+    },
+    'Zoom': {
+      label: 'Zoom (1ch)',
+      domain: 'Beam',
+      controlType: 'Zoom',
+      channelCount: 1,
+      components: [
+        { type: 'zoom', name: 'zoom', offset: 0 }
+      ],
+      defaultValue: { type: 'scalar', v: 127 / 255 }
+    }
+  };
+
+  const uuidv4 = () => {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c === 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+  };
+
+  const addControlBlock = (profileIndex, typeName) => {
+    const newConfig = { ...config };
+    const profile = newConfig.fixtureProfiles[profileIndex];
+
+    if (!profile.controls) {
+      profile.controls = [];
+    }
+
+    const template = CONTROL_BLOCK_TYPES[typeName];
+    if (!template) return;
+
+    // Calculate offset based on existing controls
+    const currentTotalChannels = profile.controls.reduce((sum, c) => sum + (c.channelCount || 0), 0);
+
+    // Create new control with updated offsets
+    const newControl = {
+      id: uuidv4(),
+      label: template.label.split('(')[0].trim(),  // Remove channel count from label
+      domain: template.domain,
+      controlType: template.controlType,
+      channelCount: template.channelCount,
+      components: template.components.map(comp => ({
+        ...comp,
+        offset: currentTotalChannels + comp.offset
+      })),
+      defaultValue: template.defaultValue
+    };
+
+    profile.controls.push(newControl);
+    setConfig(newConfig);
+    setHasUnsavedChanges(true);
+  };
+
+  const removeControlBlock = (profileIndex, controlIndex) => {
+    const newConfig = { ...config };
+    const profile = newConfig.fixtureProfiles[profileIndex];
+
+    profile.controls.splice(controlIndex, 1);
+
+    // Recalculate all offsets
+    let runningOffset = 0;
+    profile.controls.forEach(control => {
+      control.components.forEach(comp => {
+        comp.offset = runningOffset;
+        runningOffset++;
+      });
+    });
+
+    setConfig(newConfig);
+    setHasUnsavedChanges(true);
+  };
+
+  const updateControlBlockLabel = (profileIndex, controlIndex, newLabel) => {
+    const newConfig = { ...config };
+    newConfig.fixtureProfiles[profileIndex].controls[controlIndex].label = newLabel;
+    setConfig(newConfig);
+    setHasUnsavedChanges(true);
+  };
+
+  const updateControlBlockComponentName = (profileIndex, controlIndex, componentIndex, newName) => {
+    const newConfig = { ...config };
+    const control = newConfig.fixtureProfiles[profileIndex].controls[controlIndex];
+    control.components[componentIndex].name = newName;
+    setConfig(newConfig);
+    setHasUnsavedChanges(true);
+  };
+
   // === SHOW LAYOUT FUNCTIONS ===
+  const generateUniqueName = (baseName, existingNames = []) => {
+    let name = baseName;
+    let counter = 2;
+
+    while (existingNames.includes(name)) {
+      name = `${baseName} ${counter}`;
+      counter++;
+    }
+
+    return name;
+  };
+
   const generateUrlSlug = (name, existingSlugs = []) => {
     const baseSlug = name
       .toLowerCase()
@@ -533,10 +814,14 @@ const SettingsPage = () => {
     const newConfig = { ...config };
     if (!newConfig.showLayouts) newConfig.showLayouts = [];
 
+    const existingNames = newConfig.showLayouts.map(l => l.name);
     const existingSlugs = newConfig.showLayouts.map(l => l.urlSlug);
     const newId = `layout-${Date.now()}`;
-    const name = 'New Layout';
+    const name = generateUniqueName('New Dashboard', existingNames);
     const urlSlug = generateUrlSlug(name, existingSlugs);
+
+    // After adding this dashboard, there will be at least 2 dashboards (or this is the first)
+    const willHaveMultipleDashboards = newConfig.showLayouts.length >= 1;
 
     const newLayout = {
       id: newId,
@@ -548,6 +833,13 @@ const SettingsPage = () => {
       title: 'Lighting',
       showBlackoutButton: true,
       showLayoutSelector: true,
+      showReturnToMenuButton: willHaveMultipleDashboards,  // Only true if there are already other dashboards
+      showSettingsButton: true,
+      showConnectedUsers: true,
+      accessControl: {
+        defaultRole: 'viewer',
+        requireExplicitAccess: false  // Allow all users by default
+      },
       sections: [
         {
           id: 'section-looks',
@@ -588,6 +880,16 @@ const SettingsPage = () => {
     if (newConfig.showLayouts.length === 1) {
       newConfig.activeLayoutId = newId;
     }
+
+    // When adding the second dashboard, enable "Return to Menu" button on all dashboards
+    if (newConfig.showLayouts.length === 2) {
+      newConfig.showLayouts.forEach(layout => {
+        if (layout.showReturnToMenuButton === undefined || layout.showReturnToMenuButton === false) {
+          layout.showReturnToMenuButton = true;
+        }
+      });
+    }
+
     setConfig(newConfig);
   };
 
@@ -606,6 +908,11 @@ const SettingsPage = () => {
     // If we deleted the active layout and it was the last one, clear activeLayoutId
     if (layout.id === newConfig.activeLayoutId) {
       delete newConfig.activeLayoutId;
+    }
+
+    // If only one dashboard remains, disable "Return to Menu" button on it
+    if (newConfig.showLayouts.length === 1) {
+      newConfig.showLayouts[0].showReturnToMenuButton = false;
     }
 
     setConfig(newConfig);
@@ -1231,24 +1538,38 @@ const SettingsPage = () => {
         </div>
       )}
 
-      <div className="settings-header" style={{ flexDirection: 'column', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
-        <h1 style={{ margin: 0, textAlign: 'center' }}>Settings</h1>
+      <div className="settings-header" style={{ flexDirection: 'row', justifyContent: config?.showLayouts?.length > 0 ? 'space-between' : 'center', alignItems: 'center', marginBottom: '16px' }}>
+        <h1 style={{ margin: 0 }}>Settings</h1>
+        {config?.showLayouts?.length > 0 && (
+          <button
+            className="btn"
+            onClick={() => {
+              if (location.state?.fromDashboard && config?.showLayouts) {
+                // Check if the dashboard still exists
+                const dashboardExists = config.showLayouts.some(d => d.urlSlug === location.state.fromDashboard);
+                if (dashboardExists) {
+                  handleNavigation(`/dashboard/${location.state.fromDashboard}`);
+                } else {
+                  // Dashboard was deleted, go to menu instead
+                  handleNavigation('/dashboard');
+                }
+              } else {
+                handleNavigation('/dashboard');
+              }
+            }}
+            style={{
+              fontSize: '14px',
+              padding: '8px 16px',
+              background: '#4a90e2',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px'
+            }}
+          >
+            ← Back to {fromDashboardName || 'Dashboard Menu'}
+          </button>
+        )}
       </div>
-      <button 
-        className="btn" 
-        onClick={() => handleNavigation('/dashboard')}
-        style={{ 
-          fontSize: '14px', 
-          padding: '8px 16px',
-          background: '#4a90e2',
-          color: 'white',
-          border: 'none',
-          borderRadius: '4px',
-          marginBottom: '12px'
-        }}
-      >
-        ← Back to Dashboard
-      </button>
 
       {saved && (
         <div className="card" style={{ background: '#1a5928', marginBottom: '12px' }}>
@@ -1256,12 +1577,9 @@ const SettingsPage = () => {
         </div>
       )}
 
-      {/* Main Layout: Tabs on Left, Content on Right */}
-      <div style={{ display: 'flex', gap: '12px', height: 'calc(100vh - 120px)' }}>
-      
       {/* Fixed Save Button - matches dashboard settings button size */}
-      <button 
-        onClick={handleSave} 
+      <button
+        onClick={handleSave}
         title={hasUnsavedChanges ? "Save Configuration (Unsaved Changes)" : "Save Configuration"}
         style={{
           position: 'fixed',
@@ -1284,9 +1602,53 @@ const SettingsPage = () => {
           <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
         </svg>
       </button>
-        {/* Vertical Tab Navigation - Fixed */}
-        <div className="tabs-container" style={{ 
-          display: 'flex', 
+
+      {/* Mobile Dropdown Navigation */}
+      <div style={{ marginBottom: '16px' }}>
+        <select
+          value={activeTab}
+          onChange={(e) => setActiveTab(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '12px 16px',
+            fontSize: '16px',
+            background: '#2a2a2a',
+            color: '#fff',
+            border: '2px solid #4a90e2',
+            borderRadius: '8px',
+            cursor: 'pointer'
+          }}
+          className="mobile-tab-selector"
+        >
+          {TABS.filter(tab => {
+            // Editors (anywhere) see all tabs
+            if (isEditorAnywhere) {
+              return true;
+            }
+
+            // Moderators (on any dashboard) can only see Users and Access tab
+            const isModeratorAnywhere = role === 'moderator' ||
+              (dashboardAccess && Object.values(dashboardAccess).some(r => r === 'moderator' || r === 'editor'));
+
+            if (isModeratorAnywhere && !isEditorAnywhere) {
+              return tab.id === 'users';
+            }
+
+            // Viewers/controllers see no settings tabs
+            return false;
+          }).map(tab => (
+            <option key={tab.id} value={tab.id}>
+              {tab.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Main Layout: Tabs on Left, Content on Right */}
+      <div style={{ display: 'flex', gap: '12px', minHeight: 'calc(100vh - 200px)' }}>
+        {/* Vertical Tab Navigation - Desktop Only */}
+        <div className="tabs-container desktop-tabs" style={{
+          display: 'flex',
           flexDirection: 'column',
           gap: '2px',
           minWidth: '160px',
@@ -1518,7 +1880,7 @@ const SettingsPage = () => {
         {selectedDashboard === 'global' && (
           <div className="settings-section">
             <h3 style={{ marginBottom: '16px' }}>Global Access Matrix</h3>
-            <p style={{ fontSize: '13px', color: '#888', marginBottom: '16px' }}>
+            <p style={{ fontSize: '14px', color: '#888', marginBottom: '20px' }}>
               View and manage user access across all dashboards. Click a cell to change a user's role for that dashboard.
             </p>
 
@@ -1610,7 +1972,8 @@ const SettingsPage = () => {
                             </div>
                           </td>
                           {config.showLayouts.map((layout) => {
-                            const dashboardRole = client.dashboardAccess?.[layout.id] || client.role || 'viewer';
+                            const dashboardRole = client.dashboardAccess?.[layout.id] || layout.accessControl?.defaultRole || 'viewer';
+                            const hasPendingRequest = client.dashboardPendingRequests?.[layout.id];
                             const roleColors = {
                               editor: { bg: '#2a4a2a', color: '#4ae24a', label: 'E' },
                               moderator: { bg: '#4a2a4a', color: '#e24ae2', label: 'M' },
@@ -1621,7 +1984,64 @@ const SettingsPage = () => {
 
                             return (
                               <td key={layout.id} style={{ padding: '8px', textAlign: 'center' }}>
-                                <select
+                                {hasPendingRequest ? (
+                                  // Show approve/deny buttons for pending requests
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'center' }}>
+                                    <div style={{ fontSize: '10px', color: '#e2904a', fontStyle: 'italic', marginBottom: '2px' }}>
+                                      Requesting
+                                    </div>
+                                    <div style={{ display: 'flex', gap: '4px' }}>
+                                      <button
+                                        onClick={() => {
+                                          fetch(`/api/dashboards/${layout.id}/clients/${client.id}/approve`, {
+                                            method: 'POST'
+                                          })
+                                            .then(res => res.json())
+                                            .then(() => {
+                                              fetchConfig();
+                                            });
+                                        }}
+                                        style={{
+                                          padding: '4px 8px',
+                                          fontSize: '10px',
+                                          fontWeight: '600',
+                                          background: '#2a4a2a',
+                                          color: '#4ae24a',
+                                          border: '1px solid #4ae24a',
+                                          borderRadius: '3px',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        ✓
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          fetch(`/api/dashboards/${layout.id}/clients/${client.id}/deny`, {
+                                            method: 'POST'
+                                          })
+                                            .then(res => res.json())
+                                            .then(() => {
+                                              fetchConfig();
+                                            });
+                                        }}
+                                        style={{
+                                          padding: '4px 8px',
+                                          fontSize: '10px',
+                                          fontWeight: '600',
+                                          background: '#4a2a2a',
+                                          color: '#e24a4a',
+                                          border: '1px solid #e24a4a',
+                                          borderRadius: '3px',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        ✗
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  // Show role selector
+                                  <select
                                   value={dashboardRole}
                                   onChange={(e) => {
                                     const newRole = e.target.value;
@@ -1671,6 +2091,7 @@ const SettingsPage = () => {
                                   <option value="moderator">Moderator</option>
                                   <option value="editor">Editor</option>
                                 </select>
+                                )}
                               </td>
                             );
                           })}
@@ -2068,11 +2489,34 @@ const SettingsPage = () => {
                 Define reusable fixture types with channel configurations
               </p>
 
-              {(config.fixtureProfiles || []).map((profile, profileIndex) => {
+              {(config?.fixtureProfiles || []).map((profile, profileIndex) => {
                 const isCollapsed = collapsedProfiles[profile.id];
-                const channelSummary = profile.channels.length + ' ch: ' + 
-                  profile.channels.map(ch => ch.name).filter((v, i, a) => a.indexOf(v) === i).slice(0, 4).join(', ') +
-                  (profile.channels.length > 4 ? '...' : '');
+
+                // Generate channel summary from Control Blocks
+                let channels = [];
+                let totalChannelCount = 0;
+                if (profile.controls && Array.isArray(profile.controls)) {
+                  profile.controls.forEach(control => {
+                    if (control) {
+                      totalChannelCount += control.channelCount || control.components?.length || 0;
+                      if (control.components && Array.isArray(control.components)) {
+                        control.components.forEach(comp => {
+                          if (comp && comp.name && !channels.includes(comp.name)) {
+                            channels.push(comp.name);
+                          }
+                        });
+                      }
+                    }
+                  });
+                } else if (profile.channels && Array.isArray(profile.channels)) {
+                  // Legacy fallback
+                  totalChannelCount = profile.channels.length;
+                  channels = profile.channels.filter(ch => ch && ch.name).map(ch => ch.name).filter((v, i, a) => a.indexOf(v) === i);
+                }
+
+                const channelSummary = totalChannelCount + ' ch: ' +
+                  channels.slice(0, 4).join(', ') +
+                  (channels.length > 4 ? '...' : '');
                 
                 return (
             <div 
@@ -2085,41 +2529,237 @@ const SettingsPage = () => {
               onDrop={(e) => handleProfileDrop(e, profileIndex)}
             >
               {/* Header row - always visible */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
-                <span 
-                  onClick={() => setCollapsedProfiles(prev => ({ ...prev, [profile.id]: !prev[profile.id] }))}
-                  style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-                >▼</span>
-                <input
-                  type="text"
-                  value={profile.name}
-                  onChange={(e) => updateProfile(profileIndex, 'name', e.target.value)}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px' }}
-                />
-                {isCollapsed && (
-                  <span style={{ color: '#666', fontSize: '12px', marginLeft: '8px' }}>{channelSummary}</span>
-                )}
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  <button
-                    className="btn btn-secondary btn-small"
-                    onClick={() => duplicateProfile(profileIndex)}
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
-                    title="Duplicate Profile"
-                  >⧉</button>
-                  <button
-                    className="btn btn-danger btn-small"
-                    onClick={() => removeProfile(profileIndex)}
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
-                    title="Delete Profile"
-                  >×</button>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? '8px' : 0 }}>
+                  <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                  <span
+                    onClick={() => setCollapsedProfiles(prev => ({ ...prev, [profile.id]: !prev[profile.id] }))}
+                    style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                  >▼</span>
+                  <input
+                    type="text"
+                    value={profile.name}
+                    onChange={(e) => updateProfile(profileIndex, 'name', e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px', minWidth: 0 }}
+                  />
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <button
+                      className="btn btn-secondary btn-small"
+                      onClick={() => duplicateProfile(profileIndex)}
+                      style={{ padding: '6px 10px', fontSize: '14px' }}
+                      title="Duplicate Profile"
+                    >⧉</button>
+                    <button
+                      className="btn btn-danger btn-small"
+                      onClick={() => removeProfile(profileIndex)}
+                      style={{ padding: '8px 12px', fontSize: '18px', lineHeight: 1 }}
+                      title="Delete Profile"
+                    >×</button>
+                  </div>
                 </div>
+                {isCollapsed && (
+                  <div style={{ paddingLeft: '56px', color: '#666', fontSize: '13px' }}>{channelSummary}</div>
+                )}
               </div>
 
               {/* Channels - collapsible */}
               {!isCollapsed && (
               <>
+              {profile.controls && Array.isArray(profile.controls) ? (
+                // New Control Blocks display (editable)
+                <div style={{ marginTop: '12px' }}>
+                  <label style={{ display: 'block', marginBottom: '8px', fontWeight: '500' }}>
+                    Control Blocks
+                  </label>
+                  {profile.controls.map((control, idx) => {
+                    if (!control) return null;
+                    const startCh = profile.controls.slice(0, idx).reduce((sum, c) => sum + (c?.channelCount || 0), 0) + 1;
+                    const endCh = startCh + (control.channelCount || 1) - 1;
+                    const chRange = startCh === endCh ? `Ch ${startCh}` : `Ch ${startCh}-${endCh}`;
+
+                    return (
+                      <div
+                        key={control.id || idx}
+                        style={{
+                          marginBottom: '8px',
+                          background: '#1a2a1a',
+                          borderRadius: '6px',
+                          border: '1px solid #2a4a2a'
+                        }}
+                        draggable="true"
+                        onDragStart={(e) => {
+                          e.dataTransfer.setData('text/plain', idx);
+                          setDraggingControlIndex(idx);
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.style.borderColor = '#4a90e2';
+                        }}
+                        onDragLeave={(e) => {
+                          e.currentTarget.style.borderColor = '#2a4a2a';
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.style.borderColor = '#2a4a2a';
+                          const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+                          if (fromIndex !== idx && !isNaN(fromIndex)) {
+                            const newConfig = { ...config };
+                            const controls = [...newConfig.fixtureProfiles[profileIndex].controls];
+                            const [movedControl] = controls.splice(fromIndex, 1);
+                            controls.splice(idx, 0, movedControl);
+                            newConfig.fixtureProfiles[profileIndex].controls = controls;
+                            setConfig(newConfig);
+                            setHasUnsavedChanges(true);
+                          }
+                          setDraggingControlIndex(null);
+                        }}
+                      >
+                        {/* Main Row */}
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '8px 12px' }}>
+                          <div
+                            style={{
+                              color: '#888',
+                              cursor: 'grab',
+                              padding: '4px',
+                              fontSize: '16px',
+                              userSelect: 'none'
+                            }}
+                          >
+                            ⋮⋮
+                          </div>
+                          <span style={{ color: '#4a90e2', fontWeight: '500', minWidth: '50px', fontSize: '13px' }}>{chRange}</span>
+                          <input
+                            type="text"
+                            value={control.label || ''}
+                            onChange={(e) => updateControlBlockLabel(profileIndex, idx, e.target.value)}
+                            placeholder="Label"
+                            style={{
+                              flex: 1,
+                              padding: '6px 10px',
+                              background: '#2a2a2a',
+                              border: '1px solid #444',
+                              borderRadius: '4px',
+                              color: '#fff',
+                              fontSize: '14px',
+                              minWidth: 0
+                            }}
+                          />
+                          <span style={{ color: '#666', fontSize: '11px', whiteSpace: 'nowrap' }}>({control.controlType})</span>
+                          <button
+                            className="btn btn-danger btn-small"
+                            onClick={() => removeControlBlock(profileIndex, idx)}
+                            style={{ padding: '4px 8px', fontSize: '14px', lineHeight: 1 }}
+                            title="Delete"
+                          >×</button>
+                        </div>
+
+                        {/* Default Value Row */}
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '0 12px 8px 12px',
+                          paddingLeft: '44px' // Align with input above
+                        }}>
+                          <label style={{ color: '#888', fontSize: '12px', minWidth: '50px' }}>Default:</label>
+
+                          {/* RGB/RGBW: Color picker */}
+                          {(control.controlType === 'RGB' || control.controlType === 'RGBW') && (
+                            <input
+                              type="color"
+                              value={(() => {
+                                const dv = control.defaultValue;
+                                if (dv?.type === 'rgb' || dv?.type === 'rgbw') {
+                                  const r = Math.round((dv.r || 0) * 255);
+                                  const g = Math.round((dv.g || 0) * 255);
+                                  const b = Math.round((dv.b || 0) * 255);
+                                  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+                                }
+                                return '#ffffff';
+                              })()}
+                              onChange={(e) => {
+                                const hex = e.target.value;
+                                const r = parseInt(hex.slice(1, 3), 16) / 255;
+                                const g = parseInt(hex.slice(3, 5), 16) / 255;
+                                const b = parseInt(hex.slice(5, 7), 16) / 255;
+                                const newConfig = { ...config };
+                                const targetControl = newConfig.fixtureProfiles[profileIndex].controls[idx];
+                                targetControl.defaultValue = {
+                                  type: control.controlType === 'RGBW' ? 'rgbw' : 'rgb',
+                                  r, g, b,
+                                  ...(control.controlType === 'RGBW' && { w: targetControl.defaultValue?.w || 1.0 })
+                                };
+                                setConfig(newConfig);
+                                setHasUnsavedChanges(true);
+                              }}
+                              style={{ width: '50px', height: '32px', cursor: 'pointer', border: '1px solid #444', borderRadius: '4px' }}
+                            />
+                          )}
+
+                          {/* Intensity/Generic: Number input (0-255) */}
+                          {(control.controlType === 'Intensity' || control.controlType === 'Generic' || control.controlType === 'Zoom') && (
+                            <>
+                              <input
+                                type="number"
+                                min="0"
+                                max="255"
+                                value={Math.round((control.defaultValue?.v || 0) * 255)}
+                                onChange={(e) => {
+                                  const dmxValue = parseInt(e.target.value) || 0;
+                                  const v = Math.max(0, Math.min(255, dmxValue)) / 255;
+                                  const newConfig = { ...config };
+                                  newConfig.fixtureProfiles[profileIndex].controls[idx].defaultValue = {
+                                    type: 'scalar',
+                                    v
+                                  };
+                                  setConfig(newConfig);
+                                  setHasUnsavedChanges(true);
+                                }}
+                                style={{
+                                  width: '70px',
+                                  padding: '6px 10px',
+                                  background: '#2a2a2a',
+                                  border: '1px solid #444',
+                                  borderRadius: '4px',
+                                  color: '#fff',
+                                  fontSize: '14px',
+                                  textAlign: 'center'
+                                }}
+                              />
+                              <span style={{ color: '#666', fontSize: '12px' }}>DMX (0-255)</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Add Control dropdown */}
+                  <div style={{ marginTop: '12px' }}>
+                    <select
+                      className="input"
+                      style={{ width: '200px', cursor: 'pointer' }}
+                      value=""
+                      onChange={(e) => {
+                        if (e.target.value) {
+                          addControlBlock(profileIndex, e.target.value);
+                          e.target.value = '';
+                        }
+                      }}
+                    >
+                      <option value="">+ Add Control</option>
+                      <option value="Intensity">Intensity (1ch)</option>
+                      <option value="RGB">RGB (3ch)</option>
+                      <option value="RGBW">RGBW (4ch)</option>
+                      <option value="Generic">Generic (1ch)</option>
+                      <option value="Zoom">Zoom (1ch)</option>
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                // Legacy channels display
+                <>
               <label style={{ display: 'block', marginTop: '12px', marginBottom: '8px', fontWeight: '500' }}>
                 Channels
               </label>
@@ -2128,7 +2768,7 @@ const SettingsPage = () => {
                 // Group consecutive channels by groupId for display
                 const displayItems = [];
                 let i = 0;
-                while (i < profile.channels.length) {
+                while (i < (profile.channels?.length || 0)) {
                   const channel = profile.channels[i];
                   if (channel.groupId) {
                     // Find all channels in this group
@@ -2288,11 +2928,13 @@ const SettingsPage = () => {
               </div>
               </>
               )}
+              </>
+              )}
             </div>
           );
           })}
 
-              <button className="btn btn-primary" onClick={addProfile} style={{ marginTop: '12px' }}>
+              <button className="btn btn-primary" onClick={addProfile} style={{ marginTop: '12px', fontSize: '24px', padding: '20px 40px' }}>
                 + Add Profile
               </button>
         </div>
@@ -2304,10 +2946,69 @@ const SettingsPage = () => {
       <div className="card">
         <div className="settings-section">
           <h3>Fixture Patching</h3>
-          {config.fixtures.map((fixture, index) => {
+          <p style={{ color: '#888', fontSize: '14px', marginBottom: '20px' }}>
+            Configure DMX fixtures and their addresses. Each fixture requires a profile (defines channels)
+            and DMX address. Use tags to organize fixtures by location or type. Assign fixtures to
+            dashboards to control their visibility. The Patch Viewer below shows the DMX channel layout.
+          </p>
+
+          {/* Filter Controls */}
+          <div style={{ marginBottom: '20px', padding: '16px', background: '#1a1a2e', borderRadius: '8px', border: '1px solid #333' }}>
+            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div className="form-group" style={{ marginBottom: 0, minWidth: '200px' }}>
+                <label style={{ marginBottom: '4px' }}>Filter by Purpose</label>
+                <select
+                  value={fixtureTagFilter || 'all'}
+                  onChange={(e) => setFixtureTagFilter(e.target.value)}
+                  style={{ width: '100%' }}
+                >
+                  <option value="all">All Fixtures</option>
+                  {allFixtureTags.map(tag => (
+                    <option key={tag} value={tag}>{tag}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="form-group" style={{ marginBottom: 0, minWidth: "200px" }}>
+                <label style={{ marginBottom: "4px" }}>Filter by Dashboard</label>
+                <select
+                  value={fixtureDashboardFilter || "all"}
+                  onChange={(e) => setFixtureDashboardFilter(e.target.value)}
+                  style={{ width: "100%" }}
+                >
+                  <option value="all">All Dashboards</option>
+                  {config?.showLayouts?.map(layout => (
+                    <option key={layout.id} value={layout.id}>{layout.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="checkbox-group" style={{ width: '100%' }}>
+                <input
+                  type="checkbox"
+                  id="showUnassignedFixtures"
+                  checked={showUnassignedFixtures}
+                  onChange={(e) => setShowUnassignedFixtures(e.target.checked)}
+                />
+                <label htmlFor="showUnassignedFixtures" style={{ margin: 0, cursor: 'pointer' }}>
+                  Show only unassigned to any dashboard
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {filteredFixtures.map((fixture, index) => {
+            const originalIndex = config.fixtures.findIndex(f => f.id === fixture.id);
                 const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
                 const isCollapsed = collapsedFixtures[fixture.id];
-                const channelCount = profile?.channels?.length || 0;
+
+                // Calculate channel count from Control Blocks or legacy channels
+                let channelCount = 0;
+                if (profile?.controls) {
+                  channelCount = profile.controls.reduce((sum, c) => sum + (c?.channelCount || 0), 0);
+                } else if (profile?.channels) {
+                  channelCount = profile.channels.length;
+                }
                 const endAddress = fixture.startAddress + channelCount - 1;
                 const addressSummary = config.network.protocol === 'artnet'
                   ? `Net${fixture.artnetNet || 0}:Sub${fixture.artnetSubnet || 0}:U${fixture.artnetUniverse || 0}`
@@ -2325,50 +3026,168 @@ const SettingsPage = () => {
                     onDrop={(e) => handleFixtureDrop(e, index)}
                   >
                     {/* Header row - always visible */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
-                      <span
-                        onClick={() => setCollapsedFixtures(prev => ({ ...prev, [fixture.id]: !prev[fixture.id] }))}
-                        style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-                      >▼</span>
-                      <input
-                        type="text"
-                        value={fixture.name}
-                        onChange={(e) => updateFixture(index, 'name', e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px' }}
-                      />
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? '8px' : 0 }}>
+                        <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                        <span
+                          onClick={() => setCollapsedFixtures(prev => ({ ...prev, [fixture.id]: !prev[fixture.id] }))}
+                          style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                        >▼</span>
+                        <input
+                          type="text"
+                          value={fixture.name}
+                          onChange={(e) => updateFixture(originalIndex, 'name', e.target.value)}
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            flex: 1,
+                            fontWeight: '500',
+                            background: '#1a1a2e',
+                            border: '1px solid #333',
+                            borderRadius: '4px',
+                            padding: '8px 12px',
+                            color: '#f0f0f0',
+                            fontSize: '16px',
+                            minWidth: 0
+                          }}
+                        />
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => openDuplicateModal(originalIndex)}
+                          style={{ padding: '6px 10px', fontSize: '14px' }}
+                          title="Duplicate Fixture"
+                        >⧉</button>
+                        <button
+                          className="btn btn-danger btn-small"
+                          onClick={() => removeFixture(originalIndex)}
+                          style={{ padding: '8px 12px', fontSize: '18px', lineHeight: 1 }}
+                          title="Delete"
+                        >×</button>
+                      </div>
                       {isCollapsed && (
-                        <span style={{ color: '#666', fontSize: '12px', whiteSpace: 'nowrap' }}>{summary}</span>
+                        <div style={{ paddingLeft: '56px', color: '#666', fontSize: '13px' }}>{summary}</div>
                       )}
-                      <button
-                        className="btn btn-secondary btn-small"
-                        onClick={() => openDuplicateModal(index)}
-                        style={{ padding: '4px 8px', fontSize: '12px' }}
-                        title="Duplicate Fixture"
-                      >⧉</button>
-                      <button
-                        className="btn btn-danger btn-small"
-                        onClick={() => removeFixture(index)}
-                        style={{ padding: '4px 8px', fontSize: '12px' }}
-                      >×</button>
                     </div>
 
                     {/* Expanded content */}
                     {!isCollapsed && (
                     <>
-                    {/* Row 1: Profile */}
-                    <div className="form-group" style={{ marginTop: '12px', marginBottom: '12px' }}>
-                      <label>Profile</label>
-                      <select
-                        value={fixture.profileId || ''}
-                        onChange={(e) => updateFixture(index, 'profileId', e.target.value)}
-                      >
-                        {(config.fixtureProfiles || []).map(p => (
-                          <option key={p.id} value={p.id}>{p.name}</option>
-                        ))}
-                      </select>
+                    {/* Row 1: Profile and Tags */}
+                    <div style={{ display: 'flex', gap: '12px', marginTop: '12px', marginBottom: '12px' }}>
+                      <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+                        <label>Profile</label>
+                        <select
+                          value={fixture.profileId || ''}
+                          onChange={(e) => updateFixture(originalIndex, 'profileId', e.target.value)}
+                        >
+                          {(config.fixtureProfiles || []).map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+                        <label>Purpose</label>
+                        <input
+                          key={`fixture-tags-${fixture.id}-${fixture.tags?.join(',') || 'empty'}`}
+                          type="text"
+                          defaultValue={fixture.tags?.[0] || ''}
+                          onBlur={(e) => {
+                            const purpose = e.target.value.trim();
+                            updateFixture(originalIndex, 'tags', purpose ? [purpose] : []);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const purpose = e.target.value.trim();
+                              updateFixture(originalIndex, 'tags', purpose ? [purpose] : []);
+                              e.target.blur();
+                            }
+                          }}
+                          placeholder="e.g. Front Wash, Back Light"
+                          style={{ width: '100%' }}
+                        />
+                      </div>
                     </div>
+
+                    {/* Color Mode Dropdown (for RGB fixtures) */}
+                    {(() => {
+                      const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
+                      const hasRed = profile?.channels?.some(ch => ch.name === 'red');
+                      const hasGreen = profile?.channels?.some(ch => ch.name === 'green');
+                      const hasBlue = profile?.channels?.some(ch => ch.name === 'blue');
+                      const isRGB = hasRed && hasGreen && hasBlue;
+
+                      if (!isRGB) return null;
+
+                      return (
+                        <div className="form-group" style={{ marginBottom: '12px' }}>
+                          <label>Color Mode</label>
+                          <select
+                            value={fixture.colorMode || 'rgb'}
+                            onChange={(e) => updateFixture(originalIndex, 'colorMode', e.target.value)}
+                          >
+                            <option value="rgb">RGB (Red/Green/Blue channels)</option>
+                            <option value="hsv">HSV (Hue/Saturation/Brightness)</option>
+                          </select>
+                          <div style={{ fontSize: '10px', color: '#666', marginTop: '4px', fontStyle: 'italic' }}>
+                            HSV mode eliminates color drift when using color wheels
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Dashboard Assignments */}
+                    {config?.showLayouts && config.showLayouts.length > 0 && (
+                      <div style={{ marginBottom: '12px', padding: '8px', background: '#252538', borderRadius: '4px', border: '1px solid #333' }}>
+                        <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>Assign to Dashboards:</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          {config.showLayouts.map(dashboard => {
+                            const fixtureSection = dashboard.sections?.find(s => s.type === 'static' && s.staticType === 'fixtures');
+                            const isAssigned = fixtureSection?.items?.some(item => item.type === 'fixture' && item.id === fixture.id);
+
+                            return (
+                              <div key={dashboard.id} className="checkbox-group" style={{ marginBottom: 0 }}>
+                                <input
+                                  type="checkbox"
+                                  id={`fixture-${fixture.id}-dashboard-${dashboard.id}`}
+                                  checked={isAssigned || false}
+                                  onChange={(e) => {
+                                    const layoutIndex = config.showLayouts.findIndex(l => l.id === dashboard.id);
+                                    const sectionIndex = config.showLayouts[layoutIndex].sections.findIndex(s => s.type === 'static' && s.staticType === 'fixtures');
+
+                                    if (e.target.checked) {
+                                      // Add to fixtures section
+                                      if (sectionIndex >= 0) {
+                                        addItemToSection(layoutIndex, sectionIndex, 'fixture', fixture.id);
+                                      }
+                                    } else {
+                                      // Remove from ALL sections on this dashboard
+                                      const newConfig = { ...config };
+                                      newConfig.showLayouts[layoutIndex].sections.forEach(section => {
+                                        section.items = section.items.filter(item => !(item.type === 'fixture' && item.id === fixture.id));
+                                      });
+                                      setConfig(newConfig);
+                                    }
+                                  }}
+                                />
+                                <label
+                                  htmlFor={`fixture-${fixture.id}-dashboard-${dashboard.id}`}
+                                  style={{
+                                    fontSize: '12px',
+                                    padding: '2px 6px',
+                                    borderRadius: '3px',
+                                    background: isAssigned ? (dashboard.backgroundColor || '#1a1a2e') : 'transparent',
+                                    border: isAssigned ? '1px solid #4a90e2' : 'none',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  {dashboard.name}
+                                </label>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Row 2: Universe/Address */}
                     <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
@@ -2381,7 +3200,7 @@ const SettingsPage = () => {
                               min="0"
                               max="127"
                               value={fixture.artnetNet || 0}
-                              onChange={(e) => updateFixture(index, 'artnetNet', parseInt(e.target.value))}
+                              onChange={(e) => updateFixture(originalIndex, 'artnetNet', parseInt(e.target.value))}
                             />
                           </div>
                           <div className="form-group" style={{ width: '80px', marginBottom: 0 }}>
@@ -2391,7 +3210,7 @@ const SettingsPage = () => {
                               min="0"
                               max="15"
                               value={fixture.artnetSubnet || 0}
-                              onChange={(e) => updateFixture(index, 'artnetSubnet', parseInt(e.target.value))}
+                              onChange={(e) => updateFixture(originalIndex, 'artnetSubnet', parseInt(e.target.value))}
                             />
                           </div>
                           <div className="form-group" style={{ width: '80px', marginBottom: 0 }}>
@@ -2401,7 +3220,7 @@ const SettingsPage = () => {
                               min="0"
                               max="15"
                               value={fixture.artnetUniverse || 0}
-                              onChange={(e) => updateFixture(index, 'artnetUniverse', parseInt(e.target.value))}
+                              onChange={(e) => updateFixture(originalIndex, 'artnetUniverse', parseInt(e.target.value))}
                             />
                           </div>
                         </>
@@ -2413,7 +3232,7 @@ const SettingsPage = () => {
                             min="1"
                             max="63999"
                             value={fixture.universe}
-                            onChange={(e) => updateFixture(index, 'universe', parseInt(e.target.value))}
+                            onChange={(e) => updateFixture(originalIndex, 'universe', parseInt(e.target.value))}
                           />
                         </div>
                       )}
@@ -2424,14 +3243,27 @@ const SettingsPage = () => {
                           min="1"
                           max="512"
                           value={fixture.startAddress}
-                          onChange={(e) => updateFixture(index, 'startAddress', parseInt(e.target.value))}
+                          onChange={(e) => updateFixture(originalIndex, 'startAddress', parseInt(e.target.value))}
                         />
                       </div>
                     </div>
 
                     {profile && (
                       <div style={{ color: '#888', fontSize: '12px', marginBottom: '12px' }}>
-                        Channels: {profile.channels.map(ch => `${ch.name}: ${fixture.startAddress + ch.offset}`).join(', ')}
+                        Channels: {profile.controls ? (
+                          // Control Blocks format
+                          profile.controls.flatMap(control =>
+                            (control.components || []).map(comp => {
+                              const offset = profile.controls
+                                .slice(0, profile.controls.indexOf(control))
+                                .reduce((sum, c) => sum + (c?.channelCount || 0), 0) + comp.offset;
+                              return `${comp.name}: ${fixture.startAddress + offset}`;
+                            })
+                          ).join(', ')
+                        ) : profile.channels ? (
+                          // Legacy channels format
+                          profile.channels.map(ch => `${ch.name}: ${fixture.startAddress + ch.offset}`).join(', ')
+                        ) : 'No channels defined'}
                       </div>
                     )}
 
@@ -2441,7 +3273,7 @@ const SettingsPage = () => {
                 );
               })}
 
-              <button className="btn btn-primary" onClick={addFixture} style={{ marginTop: '12px' }}>
+              <button className="btn btn-primary" onClick={addFixture} style={{ marginTop: '12px', fontSize: '24px', padding: '20px 40px' }}>
                 + Add Fixture
               </button>
 
@@ -2464,15 +3296,15 @@ const SettingsPage = () => {
                   </div>
                 </div>
                 
-                {/* 512 channel grid - 24 columns x ~22 rows */}
-                <div style={{ 
-                  display: 'grid', 
-                  gridTemplateColumns: 'repeat(24, 1fr)', 
-                  gap: '2px', 
+                {/* 512 channel grid - 16 columns x 32 rows */}
+                <div className="patch-viewer-grid" style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(16, 1fr)',
+                  gap: '3px',
                   background: '#222',
-                  padding: '2px',
-                  borderRadius: '4px',
-                  fontSize: '10px'
+                  padding: '4px',
+                  borderRadius: '6px',
+                  fontSize: '11px'
                 }}>
                   {Array.from({ length: 512 }, (_, i) => {
                     const channel = i + 1;
@@ -2511,13 +3343,13 @@ const SettingsPage = () => {
                     if (fixture && !hasOverlap) {
                       if (isFirstChannel) borderStyle.borderLeft = '2px solid rgba(255,255,255,0.8)';
                       if (isLastChannel) borderStyle.borderRight = '2px solid rgba(255,255,255,0.8)';
-                      // Top border for first row of fixture
-                      if (channel <= fixture.startAddress + 23 && channel >= fixture.startAddress) {
+                      // Top border for first row of fixture (16 columns)
+                      if (channel <= fixture.startAddress + 15 && channel >= fixture.startAddress) {
                         borderStyle.borderTop = '2px solid rgba(255,255,255,0.8)';
                       }
-                      // Bottom border for last row of fixture  
-                      const lastRowStart = fixture.startAddress + channelCount - ((channelCount - 1) % 24) - 1;
-                      if (channel >= fixture.startAddress + channelCount - 24 || channel > lastRowStart) {
+                      // Bottom border for last row of fixture (16 columns)
+                      const lastRowStart = fixture.startAddress + channelCount - ((channelCount - 1) % 16) - 1;
+                      if (channel >= fixture.startAddress + channelCount - 16 || channel > lastRowStart) {
                         borderStyle.borderBottom = '2px solid rgba(255,255,255,0.8)';
                       }
                     }
@@ -2530,16 +3362,17 @@ const SettingsPage = () => {
                         key={channel}
                         style={{
                           background: hasOverlap ? '#b86800' : (fixture ? getFixtureColor(fixture) : '#1a1a2e'),
-                          padding: '2px 1px',
+                          padding: '4px 2px',
                           textAlign: 'center',
                           color: fixture ? '#fff' : '#555',
                           cursor: fixture ? 'grab' : 'default',
-                          minHeight: '36px',
+                          minHeight: '48px',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
                           position: 'relative',
+                          borderRadius: '3px',
                           ...borderStyle
                         }}
                         title={fixture ? `${fixture.name}\n${channelName} (Ch ${channel})\nValue: ${dmxValue}\nDrag to move` : `Ch ${channel} - Value: ${dmxValue}`}
@@ -2616,7 +3449,45 @@ const SettingsPage = () => {
       <div className="card">
         <div className="settings-section">
           <h3>Look Editor</h3>
-          {config.looks.map((look, lookIndex) => {
+          <p style={{ color: '#888', fontSize: '14px', marginBottom: '20px' }}>
+            Create and manage lighting looks (presets). Each look stores target values for fixtures.
+            Use dashboard filters to organize looks, or filter by unassigned looks to find unused ones.
+            Assign looks to dashboards in the "Assign to Dashboards" section below.
+          </p>
+
+          {/* Filter Controls */}
+          <div style={{ marginBottom: '20px', padding: '16px', background: '#1a1a2e', borderRadius: '8px', border: '1px solid #333' }}>
+            <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+              <div className="form-group" style={{ marginBottom: 0, minWidth: "200px" }}>
+                <label style={{ marginBottom: "4px" }}>Filter by Dashboard</label>
+                <select
+                  value={lookDashboardFilter || "all"}
+                  onChange={(e) => setLookDashboardFilter(e.target.value)}
+                  style={{ width: "100%" }}
+                >
+                  <option value="all">All Dashboards</option>
+                  {config?.showLayouts?.map(layout => (
+                    <option key={layout.id} value={layout.id}>{layout.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="checkbox-group" style={{ width: '100%' }}>
+                <input
+                  type="checkbox"
+                  id="showUnassignedLooks"
+                  checked={showUnassignedLooks}
+                  onChange={(e) => setShowUnassignedLooks(e.target.checked)}
+                />
+                <label htmlFor="showUnassignedLooks" style={{ margin: 0, cursor: 'pointer' }}>
+                  Show only unassigned to any dashboard
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {filteredLooks.map((look, index) => {
+            const originalLookIndex = config.looks.findIndex(l => l.id === look.id);
                 const isCollapsed = collapsedSections[look.id];
                 return (
             <div
@@ -2624,53 +3495,141 @@ const SettingsPage = () => {
               className="look-editor"
               style={{ position: 'relative' }}
               draggable
-              onDragStart={(e) => handleLookDragStart(e, lookIndex)}
-              onDragOver={(e) => handleLookDragOver(e, lookIndex)}
-              onDrop={(e) => handleLookDrop(e, lookIndex)}
+              onDragStart={(e) => handleLookDragStart(e, originalLookIndex)}
+              onDragOver={(e) => handleLookDragOver(e, originalLookIndex)}
+              onDrop={(e) => handleLookDrop(e, originalLookIndex)}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
-                  <span
-                    onClick={() => setCollapsedSections(prev => ({ ...prev, [look.id]: !prev[look.id] }))}
-                    style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-                  >▼</span>
-                  <h4 style={{ margin: 0 }}>{look.name}</h4>
-                </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => handleCaptureLook(look.id)}
-                  >
-                    Record Current
-                  </button>
-                  <button
-                    className="btn btn-danger"
-                    onClick={() => removeLook(lookIndex)}
-                  >
-                    Delete
-                  </button>
-                </div>
+              {/* Header row - always visible */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? 0 : '12px' }}>
+                <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                <span
+                  onClick={() => setCollapsedSections(prev => ({ ...prev, [look.id]: !prev[look.id] }))}
+                  style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                >▼</span>
+                <input
+                  type="text"
+                  value={look.name}
+                  onChange={(e) => updateLook(originalLookIndex, 'name', e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    flex: 1,
+                    fontWeight: '500',
+                    background: '#1a1a2e',
+                    border: '1px solid #333',
+                    borderRadius: '4px',
+                    padding: '8px 12px',
+                    color: '#f0f0f0',
+                    fontSize: '16px',
+                    minWidth: 0
+                  }}
+                />
+                <button
+                  className="btn btn-secondary btn-small"
+                  onClick={() => handleCaptureLook(look.id)}
+                  style={{
+                    padding: '0',
+                    width: '32px',
+                    height: '32px',
+                    borderRadius: '50%',
+                    background: '#dc3545',
+                    border: '2px solid #dc3545',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s'
+                  }}
+                  title="Record Current"
+                  onMouseEnter={(e) => {
+                    e.target.style.background = '#c82333';
+                    e.target.style.borderColor = '#c82333';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.background = '#dc3545';
+                    e.target.style.borderColor = '#dc3545';
+                  }}
+                >
+                  <span style={{
+                    width: '12px',
+                    height: '12px',
+                    borderRadius: '50%',
+                    background: 'white',
+                    display: 'block'
+                  }} />
+                </button>
+                <button
+                  className="btn btn-danger btn-small"
+                  onClick={() => removeLook(originalLookIndex)}
+                  style={{ padding: '8px 12px', fontSize: '18px', lineHeight: 1 }}
+                  title="Delete"
+                >
+                  ×
+                </button>
               </div>
 
               {!isCollapsed && (
               <>
 
-              <div className="form-group">
-                <label>Look Name</label>
-                <input
-                  type="text"
-                  value={look.name}
-                  onChange={(e) => updateLook(lookIndex, 'name', e.target.value)}
-                />
-              </div>
+              {/* Dashboard Assignments */}
+              {config?.showLayouts && config.showLayouts.length > 0 && (
+                <div style={{ marginBottom: '12px', padding: '8px', background: '#252538', borderRadius: '4px', border: '1px solid #333' }}>
+                  <div style={{ fontSize: '11px', color: '#888', marginBottom: '6px', fontWeight: '600' }}>Assign to Dashboards:</div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    {config.showLayouts.map(dashboard => {
+                      const lookSection = dashboard.sections?.find(s => s.type === 'static' && s.staticType === 'looks');
+                      const isAssigned = lookSection?.items?.some(item => item.type === 'look' && item.id === look.id);
+
+                      return (
+                        <div key={dashboard.id} className="checkbox-group" style={{ marginBottom: 0 }}>
+                          <input
+                            type="checkbox"
+                            id={`look-${look.id}-dashboard-${dashboard.id}`}
+                            checked={isAssigned || false}
+                            onChange={(e) => {
+                              const layoutIndex = config.showLayouts.findIndex(l => l.id === dashboard.id);
+                              const sectionIndex = config.showLayouts[layoutIndex].sections.findIndex(s => s.type === 'static' && s.staticType === 'looks');
+
+                              if (e.target.checked) {
+                                // Add to looks section
+                                if (sectionIndex >= 0) {
+                                  addItemToSection(layoutIndex, sectionIndex, 'look', look.id);
+                                }
+                              } else {
+                                // Remove from ALL sections on this dashboard
+                                const newConfig = { ...config };
+                                newConfig.showLayouts[layoutIndex].sections.forEach(section => {
+                                  section.items = section.items.filter(item => !(item.type === 'look' && item.id === look.id));
+                                });
+                                setConfig(newConfig);
+                              }
+                            }}
+                          />
+                          <label
+                            htmlFor={`look-${look.id}-dashboard-${dashboard.id}`}
+                            style={{
+                              fontSize: '12px',
+                              padding: '2px 6px',
+                              borderRadius: '3px',
+                              background: isAssigned ? (dashboard.backgroundColor || '#1a1a2e') : 'transparent',
+                              border: isAssigned ? '1px solid #4a90e2' : 'none',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {dashboard.name}
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="form-group checkbox-group">
                 <input
                   type="checkbox"
                   id={`showRecordBtn-${look.id}`}
                   checked={look.showRecordButton === true}
-                  onChange={(e) => updateLook(lookIndex, 'showRecordButton', e.target.checked)}
+                  onChange={(e) => updateLook(originalLookIndex, 'showRecordButton', e.target.checked)}
                 />
                 <label htmlFor={`showRecordBtn-${look.id}`}>Show Record Button in Main UI</label>
               </div>
@@ -2681,7 +3640,7 @@ const SettingsPage = () => {
                   {LOOK_COLORS.map(color => (
                     <button
                       key={color.id}
-                      onClick={() => updateLook(lookIndex, 'color', color.id)}
+                      onClick={() => updateLook(originalLookIndex, 'color', color.id)}
                       style={{
                         width: '32px',
                         height: '32px',
@@ -2705,29 +3664,84 @@ const SettingsPage = () => {
                 {config.fixtures.map(fixture => {
                   const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
                   if (!profile) return null;
-                  
+
                   const targets = look.targets[fixture.id] || {};
+                  const colorMode = fixture.colorMode || 'rgb';
 
                   return (
                     <div key={fixture.id} className="fixture-targets" style={{ marginBottom: '16px', padding: '12px', background: '#1a1a2e', borderRadius: '8px' }}>
-                      <h5 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#ccc' }}>{fixture.name}</h5>
-                      
-                      {profile.channels.map(channel => (
-                        <div key={channel.name} className="slider-group" style={{ marginBottom: '8px' }}>
-                          <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-                            <span>{channel.name.charAt(0).toUpperCase() + channel.name.slice(1)}</span>
-                            <span>{targets[channel.name] || 0}%</span>
-                          </label>
-                          <input
-                            type="range"
-                            min="0"
-                            max="100"
-                            value={targets[channel.name] || 0}
-                            onChange={(e) => updateLookTarget(lookIndex, fixture.id, channel.name, e.target.value)}
-                            style={{ width: '100%' }}
-                          />
-                        </div>
-                      ))}
+                      <h5 style={{ margin: '0 0 12px 0', fontSize: '14px', color: '#ccc' }}>
+                        {fixture.name}
+                        {colorMode === 'hsv' && (
+                          <span style={{ marginLeft: '8px', fontSize: '10px', color: '#888', fontWeight: 'normal' }}>(HSV Mode)</span>
+                        )}
+                      </h5>
+
+                      {colorMode === 'hsv' ? (
+                        // HSV mode: Show hue, sat, brightness sliders
+                        <>
+                          <div className="slider-group" style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                              <span>Hue</span>
+                              <span>{targets.hue || 0}°</span>
+                            </label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="360"
+                              value={targets.hue || 0}
+                              onChange={(e) => updateLookTarget(originalLookIndex, fixture.id, 'hue', e.target.value)}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                          <div className="slider-group" style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                              <span>Saturation</span>
+                              <span>{targets.sat || 0}%</span>
+                            </label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={targets.sat || 0}
+                              onChange={(e) => updateLookTarget(originalLookIndex, fixture.id, 'sat', e.target.value)}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                          <div className="slider-group" style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                              <span>Brightness</span>
+                              <span>{targets.brightness || 0}%</span>
+                            </label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={targets.brightness || 0}
+                              onChange={(e) => updateLookTarget(originalLookIndex, fixture.id, 'brightness', e.target.value)}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                        </>
+                      ) : (
+                        // RGB mode: Show channel sliders
+                        profile.channels.map(channel => (
+                          <div key={channel.name} className="slider-group" style={{ marginBottom: '8px' }}>
+                            <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
+                              <span>{channel.name.charAt(0).toUpperCase() + channel.name.slice(1)}</span>
+                              <span>{targets[channel.name] || 0}%</span>
+                            </label>
+                            <input
+                              type="range"
+                              min="0"
+                              max="100"
+                              value={targets[channel.name] || 0}
+                              onChange={(e) => updateLookTarget(originalLookIndex, fixture.id, channel.name, e.target.value)}
+                              style={{ width: '100%' }}
+                            />
+                          </div>
+                        ))
+                      )}
                     </div>
                   );
                 })}
@@ -2738,7 +3752,7 @@ const SettingsPage = () => {
                 );
           })}
 
-              <button className="btn btn-primary" onClick={addLook} style={{ marginTop: '12px' }}>
+              <button className="btn btn-primary" onClick={addLook} style={{ marginTop: '12px', fontSize: '24px', padding: '20px 40px' }}>
                 + Add Look
               </button>
         </div>
@@ -2772,37 +3786,39 @@ const SettingsPage = () => {
                 }}
               >
                 {/* Header row - always visible */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span
-                    onClick={() => setCollapsedLayouts(prev => ({ ...prev, [layout.id]: !prev[layout.id] }))}
-                    style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
-                  >▼</span>
-                  <input
-                    type="text"
-                    value={layout.name}
-                    onChange={(e) => updateShowLayout(layoutIndex, 'name', e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px' }}
-                  />
-                  {isCollapsed && (
-                    <span style={{ color: '#666', fontSize: '12px' }}>
-                      {(layout.sections || []).filter(s => s.visible !== false).length} visible sections
-                    </span>
-                  )}
-                  <div style={{ display: 'flex', gap: '4px' }}>
-                    <button
-                      className="btn btn-secondary btn-small"
-                      onClick={() => duplicateShowLayout(layoutIndex)}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                      title="Duplicate Layout"
-                    >⧉</button>
-                    <button
-                      className="btn btn-danger btn-small"
-                      onClick={() => removeShowLayout(layoutIndex)}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                      title="Delete Layout"
-                    >×</button>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? '8px' : 0 }}>
+                    <span
+                      onClick={() => setCollapsedLayouts(prev => ({ ...prev, [layout.id]: !prev[layout.id] }))}
+                      style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                    >▼</span>
+                    <input
+                      type="text"
+                      value={layout.name}
+                      onChange={(e) => updateShowLayout(layoutIndex, 'name', e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px', minWidth: 0 }}
+                    />
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        className="btn btn-secondary btn-small"
+                        onClick={() => duplicateShowLayout(layoutIndex)}
+                        style={{ padding: '6px 10px', fontSize: '14px' }}
+                        title="Duplicate Dashboard"
+                      >⧉</button>
+                      <button
+                        className="btn btn-danger btn-small"
+                        onClick={() => removeShowLayout(layoutIndex)}
+                        style={{ padding: '8px 12px', fontSize: '18px', lineHeight: 1 }}
+                        title="Delete Dashboard"
+                      >×</button>
+                    </div>
                   </div>
+                  {isCollapsed && (
+                    <div style={{ paddingLeft: '32px', color: '#666', fontSize: '13px' }}>
+                      {(layout.sections || []).filter(s => s.visible !== false).length} visible sections
+                    </div>
+                  )}
                 </div>
 
                 {/* Expanded content */}
@@ -2880,7 +3896,7 @@ const SettingsPage = () => {
                         checked={layout.showName === true}
                         onChange={(e) => updateShowLayout(layoutIndex, 'showName', e.target.checked)}
                       />
-                      <label htmlFor={`showName-${layout.id}`}>Show Layout Name on Main Page</label>
+                      <label htmlFor={`showName-${layout.id}`}>Show Layout Name</label>
                     </div>
 
                     <div className="form-group checkbox-group">
@@ -2896,32 +3912,24 @@ const SettingsPage = () => {
                     <div className="form-group checkbox-group">
                       <input
                         type="checkbox"
-                        id={`showLayoutSelector-${layout.id}`}
-                        checked={layout.showLayoutSelector !== false}
-                        onChange={(e) => updateShowLayout(layoutIndex, 'showLayoutSelector', e.target.checked)}
-                      />
-                      <label htmlFor={`showLayoutSelector-${layout.id}`}>Show Layout Selector</label>
-                    </div>
-
-                    <div className="form-group checkbox-group">
-                      <input
-                        type="checkbox"
-                        id={`showSettingsButton-${layout.id}`}
-                        checked={layout.showSettingsButton !== false}
-                        onChange={(e) => updateShowLayout(layoutIndex, 'showSettingsButton', e.target.checked)}
-                      />
-                      <label htmlFor={`showSettingsButton-${layout.id}`}>Show Settings Button</label>
-                    </div>
-
-                    <div className="form-group checkbox-group">
-                      <input
-                        type="checkbox"
                         id={`showConnectedUsers-${layout.id}`}
                         checked={layout.showConnectedUsers !== false}
                         onChange={(e) => updateShowLayout(layoutIndex, 'showConnectedUsers', e.target.checked)}
                       />
-                      <label htmlFor={`showConnectedUsers-${layout.id}`}>Show Connected Users Indicator</label>
+                      <label htmlFor={`showConnectedUsers-${layout.id}`}>Show Connected Users</label>
                     </div>
+
+                    {config.showLayouts && config.showLayouts.length > 1 && (
+                      <div className="form-group checkbox-group">
+                        <input
+                          type="checkbox"
+                          id={`showReturnToMenuButton-${layout.id}`}
+                          checked={layout.showReturnToMenuButton !== false}
+                          onChange={(e) => updateShowLayout(layoutIndex, 'showReturnToMenuButton', e.target.checked)}
+                        />
+                        <label htmlFor={`showReturnToMenuButton-${layout.id}`}>Show Return to Menu Button</label>
+                      </div>
+                    )}
                   </div>
 
                   {/* Dashboard URL and QR Code */}
@@ -2941,7 +3949,6 @@ const SettingsPage = () => {
                           className="btn btn-secondary btn-small"
                           onClick={() => {
                             navigator.clipboard.writeText(`${window.location.origin}/dashboard/${layout.urlSlug}`);
-                            alert('URL copied to clipboard!');
                           }}
                           style={{ padding: '8px 12px', fontSize: '12px' }}
                         >
@@ -3011,18 +4018,21 @@ const SettingsPage = () => {
                     </p>
 
                     {config.clients && config.clients.filter(client => {
-                      const dashboardRole = client.dashboardAccess?.[layout.id] || client.role;
-                      const hasAccess = client.dashboardAccess?.[layout.id] || !layout.accessControl?.requireExplicitAccess;
-                      return hasAccess;
+                      // User has access if they have explicit dashboard access OR dashboard doesn't require explicit access
+                      const hasExplicitAccess = client.dashboardAccess && client.dashboardAccess[layout.id];
+                      const dashboardAllowsAll = !layout.accessControl?.requireExplicitAccess;
+                      return hasExplicitAccess || dashboardAllowsAll;
                     }).length > 0 ? (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                         {config.clients.filter(client => {
-                          const hasAccess = client.dashboardAccess?.[layout.id] || !layout.accessControl?.requireExplicitAccess;
-                          return hasAccess;
+                          const hasExplicitAccess = client.dashboardAccess && client.dashboardAccess[layout.id];
+                          const dashboardAllowsAll = !layout.accessControl?.requireExplicitAccess;
+                          return hasExplicitAccess || dashboardAllowsAll;
                         }).map((client) => {
                           const shortId = client.id.substring(0, 6).toUpperCase();
                           const isActive = activeClients.some(ac => ac.id === client.id);
-                          const dashboardRole = client.dashboardAccess?.[layout.id] || client.role || 'viewer';
+                          // Use explicit dashboard role if set, otherwise use dashboard's default role
+                          const dashboardRole = client.dashboardAccess?.[layout.id] || layout.accessControl?.defaultRole || 'viewer';
 
                           return (
                             <div
@@ -3049,55 +4059,114 @@ const SettingsPage = () => {
                               />
                               <span style={{ fontWeight: '600', flex: 1 }}>
                                 {client.nickname || shortId}
+                                {client.dashboardPendingRequests?.[layout.id] && (
+                                  <span style={{ fontSize: '10px', color: '#e2904a', marginLeft: '8px', fontStyle: 'italic' }}>
+                                    (requesting access)
+                                  </span>
+                                )}
                               </span>
-                              <select
-                                value={dashboardRole}
-                                onChange={(e) => {
-                                  const newRole = e.target.value;
 
-                                  // If setting to Editor, apply to ALL dashboards
-                                  if (newRole === 'editor') {
-                                    if (window.confirm(`Making this user an Editor will grant them Editor access to ALL dashboards. Continue?`)) {
-                                      // Update all dashboards
-                                      const updatePromises = config.showLayouts.map(layout =>
-                                        fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
-                                          method: 'POST',
-                                          headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify({ role: 'editor' })
-                                        })
-                                      );
+                              {client.dashboardPendingRequests?.[layout.id] ? (
+                                // Show approve/deny buttons if there's a pending request for this dashboard
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button
+                                    className="btn btn-primary"
+                                    onClick={() => {
+                                      fetch(`/api/dashboards/${layout.id}/clients/${client.id}/approve`, {
+                                        method: 'POST'
+                                      })
+                                        .then(res => res.json())
+                                        .then(() => {
+                                          fetchConfig();
+                                        });
+                                    }}
+                                    style={{
+                                      padding: '4px 10px',
+                                      fontSize: '11px',
+                                      background: '#4ae24a',
+                                      color: '#000',
+                                      border: 'none',
+                                      borderRadius: '3px',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    Approve
+                                  </button>
+                                  <button
+                                    className="btn btn-danger"
+                                    onClick={() => {
+                                      fetch(`/api/dashboards/${layout.id}/clients/${client.id}/deny`, {
+                                        method: 'POST'
+                                      })
+                                        .then(res => res.json())
+                                        .then(() => {
+                                          fetchConfig();
+                                        });
+                                    }}
+                                    style={{
+                                      padding: '4px 10px',
+                                      fontSize: '11px',
+                                      background: '#e24a4a',
+                                      color: '#fff',
+                                      border: 'none',
+                                      borderRadius: '3px',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    Deny
+                                  </button>
+                                </div>
+                              ) : (
+                                // Show role selector if no pending request
+                                <select
+                                  value={dashboardRole}
+                                  onChange={(e) => {
+                                    const newRole = e.target.value;
 
-                                      Promise.all(updatePromises)
+                                    // If setting to Editor, apply to ALL dashboards
+                                    if (newRole === 'editor') {
+                                      if (window.confirm(`Making this user an Editor will grant them Editor access to ALL dashboards. Continue?`)) {
+                                        // Update all dashboards
+                                        const updatePromises = config.showLayouts.map(layout =>
+                                          fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ role: 'editor' })
+                                          })
+                                        );
+
+                                        Promise.all(updatePromises)
+                                          .then(() => fetchConfig())
+                                          .catch(err => console.error('Failed to update roles:', err));
+                                      }
+                                    } else {
+                                      // Normal per-dashboard role update
+                                      fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ role: newRole })
+                                      })
+                                        .then(res => res.json())
                                         .then(() => fetchConfig())
-                                        .catch(err => console.error('Failed to update roles:', err));
+                                        .catch(err => console.error('Failed to update role:', err));
                                     }
-                                  } else {
-                                    // Normal per-dashboard role update
-                                    fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ role: newRole })
-                                    })
-                                      .then(res => res.json())
-                                      .then(() => fetchConfig())
-                                      .catch(err => console.error('Failed to update role:', err));
-                                  }
-                                }}
-                                style={{
-                                  padding: '4px 6px',
-                                  fontSize: '11px',
-                                  background: '#1a1a2e',
-                                  border: '1px solid #333',
-                                  borderRadius: '3px',
-                                  color: '#f0f0f0',
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                <option value="viewer">Viewer</option>
-                                <option value="controller">Controller</option>
-                                <option value="moderator">Moderator</option>
-                                <option value="editor">Editor</option>
-                              </select>
+                                  }}
+                                  style={{
+                                    padding: '4px 6px',
+                                    fontSize: '11px',
+                                    background: '#1a1a2e',
+                                    border: '1px solid #333',
+                                    borderRadius: '3px',
+                                    color: '#f0f0f0',
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  <option value="viewer">Viewer</option>
+                                  <option value="controller">Controller</option>
+                                  <option value="moderator">Moderator</option>
+                                  <option value="editor">Editor</option>
+                                </select>
+                              )}
                             </div>
                           );
                         })}
@@ -3177,8 +4246,7 @@ const SettingsPage = () => {
                               )}
                             </div>
 
-                            {/* Add Item Dropdown - only for custom sections */}
-                            {!isStatic && (
+                            {/* Add Item Dropdown - for both custom and static sections */}
                             <div style={{ marginBottom: '8px' }}>
                               <select
                                 onChange={(e) => {
@@ -3214,12 +4282,40 @@ const SettingsPage = () => {
                                 }}
                               >
                                 <option value="">+ Add Item to Section...</option>
-                                <option value="all:looks" style={{ fontWeight: 'bold' }}>➕ Add All Looks</option>
-                                <option value="all:fixtures" style={{ fontWeight: 'bold' }}>➕ Add All Fixtures</option>
-                                <optgroup label="Looks">
-                                  {config.looks.map(look => (
-                                    <option key={look.id} value={`look:${look.id}`}>
-                                      {look.name}
+                                {/* For static sections, only show relevant type */}
+                                {isStatic && section.staticType === 'looks' && (
+                                  <>
+                                    <option value="all:looks" style={{ fontWeight: 'bold' }}>➕ Add All Looks</option>
+                                    <optgroup label="Looks">
+                                      {config.looks.map(look => (
+                                        <option key={look.id} value={`look:${look.id}`}>
+                                          {look.name}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  </>
+                                )}
+                                {isStatic && section.staticType === 'fixtures' && (
+                                  <>
+                                    <option value="all:fixtures" style={{ fontWeight: 'bold' }}>➕ Add All Fixtures</option>
+                                    <optgroup label="Fixtures">
+                                      {config.fixtures.map(fixture => (
+                                        <option key={fixture.id} value={`fixture:${fixture.id}`}>
+                                          {fixture.name}
+                                        </option>
+                                      ))}
+                                    </optgroup>
+                                  </>
+                                )}
+                                {/* For custom sections, show everything */}
+                                {!isStatic && (
+                                  <>
+                                    <option value="all:looks" style={{ fontWeight: 'bold' }}>➕ Add All Looks</option>
+                                    <option value="all:fixtures" style={{ fontWeight: 'bold' }}>➕ Add All Fixtures</option>
+                                    <optgroup label="Looks">
+                                      {config.looks.map(look => (
+                                        <option key={look.id} value={`look:${look.id}`}>
+                                          {look.name}
                                     </option>
                                   ))}
                                 </optgroup>
@@ -3230,9 +4326,10 @@ const SettingsPage = () => {
                                     </option>
                                   ))}
                                 </optgroup>
+                                  </>
+                                )}
                               </select>
                             </div>
-                            )}
 
                             {/* Visible All / Deselect All toggle */}
                             <div style={{ marginBottom: '8px', display: 'flex', gap: '8px' }}>
@@ -3316,6 +4413,41 @@ const SettingsPage = () => {
                                           Visible
                                         </label>
                                       </div>
+
+                                      {/* Display Mode dropdown for RGB fixtures */}
+                                      {item.type === 'fixture' && (() => {
+                                        const fixture = config.fixtures.find(f => f.id === item.id);
+                                        const profile = config.fixtureProfiles?.find(p => p.id === fixture?.profileId);
+
+                                        // Check if RGB fixture (has red, green, blue channels)
+                                        const hasRed = profile?.channels?.some(ch => ch.name === 'red');
+                                        const hasGreen = profile?.channels?.some(ch => ch.name === 'green');
+                                        const hasBlue = profile?.channels?.some(ch => ch.name === 'blue');
+                                        const isRGB = hasRed && hasGreen && hasBlue;
+
+                                        if (!isRGB) return null;
+
+                                        return (
+                                          <select
+                                            value={item.displayMode || 'sliders'}
+                                            onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'displayMode', e.target.value)}
+                                            style={{
+                                              padding: '4px 6px',
+                                              fontSize: '11px',
+                                              background: '#2a2a2a',
+                                              color: '#f0f0f0',
+                                              border: '1px solid #444',
+                                              borderRadius: '4px',
+                                              marginLeft: '8px'
+                                            }}
+                                            title="Display Mode"
+                                          >
+                                            <option value="sliders">Sliders</option>
+                                            <option value="colorwheel">Wheel</option>
+                                          </select>
+                                        );
+                                      })()}
+
                                       <button
                                         className="btn btn-danger btn-small"
                                         onClick={() => removeItemFromSection(layoutIndex, sectionIndex, itemIndex)}
@@ -3344,7 +4476,7 @@ const SettingsPage = () => {
             );
           })}
 
-          <button className="btn btn-primary" onClick={addShowLayout} style={{ marginTop: '12px' }}>
+          <button className="btn btn-primary" onClick={addShowLayout} style={{ marginTop: '12px', fontSize: '24px', padding: '20px 40px' }}>
             + Add Dashboard
           </button>
         </div>

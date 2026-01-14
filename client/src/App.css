@@ -357,7 +357,7 @@
   font-size: 16px;
   font-weight: 500;
   border: none;
-  border-radius: 6px;
+  border-radius: px;
   cursor: pointer;
   transition: background 0.2s;
   margin-right: 12px;
@@ -669,4 +669,331 @@
 
 .slider.manual-value::-moz-range-thumb {
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.8);
+}
+
+/* Settings Page Mobile Navigation */
+/* Hide mobile dropdown on desktop */
+.mobile-tab-selector {
+  display: block;
+}
+
+.desktop-tabs {
+  display: none !important;
+}
+
+/* Show desktop tabs and hide mobile dropdown on larger screens */
+@media (min-width: 768px) {
+  .mobile-tab-selector {
+    display: none !important;
+  }
+
+  .desktop-tabs {
+    display: flex !important;
+  }
+}
+
+/* Mobile-specific fixes for Settings page */
+@media (max-width: 767px) {
+  .settings-page {
+    padding: 12px;
+    padding-bottom: 80px;
+  }
+
+  .settings-header {
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .settings-header h1 {
+    font-size: 24px;
+  }
+
+  .card {
+    padding: 16px;
+    margin-bottom: 16px;
+    overflow-x: hidden;
+  }
+
+  .settings-section h3 {
+    font-size: 18px;
+    word-wrap: break-word;
+  }
+
+  /* Fix form inputs extending off screen */
+  .form-group input,
+  .form-group select {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Fix long text wrapping */
+  .form-group label {
+    font-size: 14px;
+    word-wrap: break-word;
+  }
+
+  /* Fix flexbox items wrapping on mobile */
+  .checkbox-group {
+    flex-wrap: wrap;
+  }
+
+  /* Reduce font sizes for better fit */
+  .settings-section p {
+    font-size: 13px;
+  }
+
+  /* Make buttons stack vertically on mobile when needed */
+  .btn {
+    white-space: normal;
+    word-wrap: break-word;
+  }
+
+  /* Fix QR code section */
+  canvas,
+  img {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* Ensure all containers respect screen width */
+  * {
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* Fix long URLs and monospace text */
+  div[style*="monospace"] {
+    font-size: 9px !important;
+    word-break: break-all;
+    overflow-wrap: break-word;
+  }
+
+  /* Make user access cards stack properly */
+  div[style*="flex"][style*="gap"] {
+    gap: 8px !important;
+  }
+
+  /* Fix section headers */
+  h4 {
+    font-size: 16px !important;
+    word-wrap: break-word;
+  }
+
+  /* Fix dropdown selects on mobile */
+  select {
+    font-size: 16px !important;
+    /* Prevents iOS zoom */
+  }
+
+  /* Ensure Back button text doesn't overflow */
+  .back-btn {
+    font-size: 14px;
+    padding: 8px 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+
+  /* Fix settings header on mobile */
+  .settings-header button {
+    font-size: 14px;
+    padding: 8px 12px;
+  }
+
+  /* Global Access Matrix - Mobile Optimizations */
+  table {
+    font-size: 10px !important;
+    display: block;
+    overflow-x: auto;
+  }
+
+  table thead,
+  table tbody {
+    display: table;
+    width: 100%;
+  }
+
+  table th,
+  table td {
+    padding: 6px 4px !important;
+    font-size: 10px !important;
+  }
+
+  /* Make client column much narrower on mobile */
+  table th:first-child,
+  table td:first-child {
+    min-width: 100px !important;
+    max-width: 120px !important;
+    padding: 6px 4px !important;
+  }
+
+  /* Client cell input - smaller */
+  table td:first-child input {
+    font-size: 11px !important;
+    padding: 2px 4px !important;
+    min-width: 60px !important;
+  }
+
+  /* Client cell metadata - smaller text */
+  table td:first-child>div>div:last-child {
+    font-size: 8px !important;
+    padding-left: 8px !important;
+  }
+
+  /* Make role dropdowns narrower - just show icon */
+  table select {
+    padding: 4px 2px !important;
+    font-size: 12px !important;
+    min-width: 45px !important;
+    max-width: 60px !important;
+    text-align: center;
+    text-align-last: center;
+  }
+
+  /* Role select options - show full text when opened */
+  table select option {
+    font-size: 14px !important;
+    text-align: left;
+  }
+
+  /* Dashboard column headers */
+  table th:not(:first-child):not(:last-child) {
+    min-width: 60px !important;
+    font-size: 10px !important;
+    word-wrap: break-word;
+  }
+
+  /* Actions column */
+  table th:last-child,
+  table td:last-child {
+    min-width: 60px !important;
+  }
+
+  /* Remove button in table */
+  table button {
+    font-size: 10px !important;
+    padding: 4px 6px !important;
+  }
+
+  /* Fixture/Look/Profile Cards - Better Mobile Layout */
+  .fixture-editor,
+  .look-editor {
+    padding: 8px !important;
+  }
+
+  /* Make fixture/look name inputs larger, buttons smaller */
+  input[type="text"] {
+    font-size: 14px !important;
+  }
+
+  /* Compact buttons on cards */
+  .btn-small {
+    padding: 4px 8px !important;
+    font-size: 10px !important;
+    min-width: auto !important;
+  }
+
+  /* All buttons in settings - make smaller on mobile */
+  .btn {
+    font-size: 11px !important;
+    padding: 6px 10px !important;
+  }
+
+  /* Keep Add buttons large even on mobile */
+  .btn-primary {
+    font-size: 18px !important;
+    padding: 12px 24px !important;
+  }
+
+  .btn-secondary {
+    font-size: 10px !important;
+    padding: 4px 8px !important;
+  }
+
+  /* Delete button (×) - keep visible but compact */
+  button[title="Delete"] {
+    padding: 6px 10px !important;
+    font-size: 16px !important;
+    min-width: 32px !important;
+  }
+
+  /* Duplicate button (⧉) - keep visible but compact */
+  button[title="Duplicate Fixture"],
+  button[title="Duplicate"] {
+    padding: 6px 10px !important;
+    font-size: 14px !important;
+    min-width: 32px !important;
+  }
+
+  /* Make drag handles smaller */
+  div[style*="cursor: grab"] {
+    font-size: 12px !important;
+    padding: 2px !important;
+  }
+
+  /* Fixture/Look header rows - better flex wrapping */
+  .fixture-editor>div:first-child,
+  .look-editor>div:first-child {
+    gap: 4px !important;
+    flex-wrap: wrap;
+  }
+
+  /* Make expand/collapse arrows smaller */
+  span[style*="cursor: pointer"][style*="transition"] {
+    font-size: 12px !important;
+  }
+
+  /* Patch Viewer - 13 columns on mobile */
+  .patch-viewer-grid {
+    grid-template-columns: repeat(13, 1fr) !important;
+  }
+}
+
+/* Color Wheel Component */
+.colorwheel-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-radius: 8px;
+  transition: outline 0.2s;
+}
+
+.colorwheel-wheel {
+  position: relative;
+  cursor: crosshair;
+  border-radius: 50%;
+}
+
+/* Manual adjustment - white outline on wheel */
+.colorwheel-wheel.colorwheel-manual {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.8);
+}
+
+.colorwheel-handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border: 3px solid white;
+  border-radius: 50%;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* Mobile optimizations for color wheel */
+@media (max-width: 767px) {
+  .colorwheel-wheel {
+    width: 180px !important;
+    height: 180px !important;
+  }
+
+  .colorwheel-handle {
+    width: 14px;
+    height: 14px;
+    border-width: 2px;
+  }
 }

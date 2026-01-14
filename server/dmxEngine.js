@@ -125,40 +125,81 @@ class DMXEngine {
 
       if (!universe || !profile) return;
 
-      // Process each channel in the profile
-      profile.channels.forEach(channel => {
-        const channelName = channel.name;
-        const dmxAddress = fixture.startAddress + channel.offset;
+      // Use Control Blocks to process each component
+      if (profile.controls) {
+        // New Control Blocks schema
+        profile.controls.forEach(control => {
+          control.components.forEach(component => {
+            const channelName = component.name;
+            const dmxAddress = fixture.startAddress + component.offset;
 
-        // Collect all sources for this channel for HTP comparison
-        const sources = [];
+            // Collect all sources for this channel for HTP comparison
+            const sources = [];
 
-        // Source 1: Individual fixture control (direct channel values)
-        const fixtureState = currentState.fixtures[fixtureId];
-        if (fixtureState) {
-          const value = fixtureState[channelName];
-          if (value > 0) {
-            sources.push(Math.round((value / 100) * 255));
-          }
-        }
+            // Source 1: Individual fixture control (direct channel values)
+            const fixtureState = currentState.fixtures[fixtureId];
+            if (fixtureState) {
+              const value = fixtureState[channelName];
+              if (value > 0) {
+                sources.push(Math.round((value / 100) * 255));
+              }
+            }
 
-        // Source 2+: Each look's contribution (direct channel values)
-        cfg.looks.forEach(look => {
-          const lookLevel = currentState.looks[look.id] || 0;
-          if (lookLevel > 0 && look.targets[fixtureId]) {
-            const target = look.targets[fixtureId];
-            const targetValue = target[channelName];
-            if (targetValue > 0) {
-              const effectiveValue = targetValue * (lookLevel / 100);
-              sources.push(Math.round((effectiveValue / 100) * 255));
+            // Source 2+: Each look's contribution (direct channel values)
+            cfg.looks.forEach(look => {
+              const lookLevel = currentState.looks[look.id] || 0;
+              if (lookLevel > 0 && look.targets[fixtureId]) {
+                const target = look.targets[fixtureId];
+                const targetValue = target[channelName];
+                if (targetValue > 0) {
+                  const effectiveValue = targetValue * lookLevel;
+                  sources.push(Math.round((effectiveValue / 100) * 255));
+                }
+              }
+            });
+
+            // Apply HTP: Take the highest value
+            const maxValue = Math.max(0, ...sources);
+            universe[dmxAddress - 1] = clamp(maxValue, 0, 255);
+          });
+        });
+      } else if (profile.channels) {
+        // Legacy fallback (shouldn't happen after migration)
+        console.warn(`[DMX] Profile ${profile.id} still has old 'channels' schema`);
+        profile.channels.forEach(channel => {
+          const channelName = channel.name;
+          const dmxAddress = fixture.startAddress + channel.offset;
+
+          // Collect all sources for this channel for HTP comparison
+          const sources = [];
+
+          // Source 1: Individual fixture control (direct channel values)
+          const fixtureState = currentState.fixtures[fixtureId];
+          if (fixtureState) {
+            const value = fixtureState[channelName];
+            if (value > 0) {
+              sources.push(Math.round((value / 100) * 255));
             }
           }
-        });
 
-        // Apply HTP: Take the highest value
-        const maxValue = Math.max(0, ...sources);
-        universe[dmxAddress - 1] = clamp(maxValue, 0, 255);
-      });
+          // Source 2+: Each look's contribution (direct channel values)
+          cfg.looks.forEach(look => {
+            const lookLevel = currentState.looks[look.id] || 0;
+            if (lookLevel > 0 && look.targets[fixtureId]) {
+              const target = look.targets[fixtureId];
+              const targetValue = target[channelName];
+              if (targetValue > 0) {
+                const effectiveValue = targetValue * lookLevel;
+                sources.push(Math.round((effectiveValue / 100) * 255));
+              }
+            }
+          });
+
+          // Apply HTP: Take the highest value
+          const maxValue = Math.max(0, ...sources);
+          universe[dmxAddress - 1] = clamp(maxValue, 0, 255);
+        });
+      }
     });
 
     return this.universes;

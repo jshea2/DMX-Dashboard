@@ -9,6 +9,7 @@ const state = require('./state');
 const outputEngine = require('./outputEngine');
 const dmxEngine = require('./dmxEngine');
 const clientManager = require('./clientManager');
+const { runMigrations } = require('./migration');
 
 const app = express();
 const server = http.createServer(app);
@@ -243,6 +244,30 @@ app.delete('/api/dashboards/:dashboardId/clients/:clientId', (req, res) => {
   }
 });
 
+// Approve client for specific dashboard (promote to controller)
+app.post('/api/dashboards/:dashboardId/clients/:clientId/approve', (req, res) => {
+  const { dashboardId, clientId } = req.params;
+  const success = clientManager.approveClient(clientId, dashboardId);
+  if (success) {
+    broadcastActiveClients();
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, error: 'Client not found' });
+  }
+});
+
+// Deny client access request for specific dashboard
+app.post('/api/dashboards/:dashboardId/clients/:clientId/deny', (req, res) => {
+  const { dashboardId, clientId } = req.params;
+  const success = clientManager.denyDashboardRequest(clientId, dashboardId);
+  if (success) {
+    broadcastActiveClients();
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, error: 'Client not found' });
+  }
+});
+
 // Get accessible dashboards for current client
 // Note: This endpoint will need client authentication to determine which client is making the request
 // For now, it returns all dashboards with their access control settings
@@ -253,9 +278,13 @@ app.get('/api/dashboards/accessible', (req, res) => {
     return res.status(400).json({ error: 'clientId is required' });
   }
 
+  const reqIp = req.socket.remoteAddress || req.connection.remoteAddress;
+  console.log(`[/api/dashboards/accessible] clientId: ${clientId.substring(0, 6)}, IP: ${reqIp}`);
+
   const cfg = config.get();
   const dashboards = (cfg.showLayouts || []).map(layout => {
     // Get the user's actual role for this dashboard
+    // NOTE: Don't pass req here because React dev proxy makes all requests appear as localhost
     const userRole = clientManager.getDashboardRole(clientId, layout.id);
     const hasAccess = clientManager.canAccessDashboard(clientId, layout.id);
 
@@ -468,11 +497,12 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-      // Request access (viewer requesting editor)
+      // Request access (viewer requesting controller for specific dashboard)
       if (msg.type === 'requestAccess') {
-        if (clientId && clientRole === 'viewer') {
-          clientManager.requestAccess(clientId);
-          console.log(`Access requested by ${clientId.substring(0, 6)}`);
+        const dashboardId = msg.dashboardId;
+        if (clientId && clientRole === 'viewer' && dashboardId) {
+          clientManager.requestDashboardAccess(clientId, dashboardId);
+          console.log(`Access requested by ${clientId.substring(0, 6)} for dashboard ${dashboardId}`);
 
           // Broadcast to notify settings page
           broadcastActiveClients();
@@ -555,13 +585,42 @@ state.addListener((newState) => {
   });
 });
 
+// Run migrations before starting
+console.log('[Server] Running migrations...');
+const fs = require('fs');
+const configPath = path.join(__dirname, 'config.json');
+
+// Create backup before migration
+const cfg = config.get();
+if (!cfg.migrationVersion || cfg.migrationVersion < 1) {
+  console.log('[Server] Creating backup before migration...');
+  const backupPath = path.join(__dirname, 'config.backup.json');
+  fs.writeFileSync(backupPath, JSON.stringify(cfg, null, 2));
+  console.log(`[Server] Backup created at ${backupPath}`);
+
+  // Run migrations
+  const migratedConfig = runMigrations(cfg);
+
+  // Save migrated config
+  console.log('[Server] Saving migrated config...');
+  fs.writeFileSync(configPath, JSON.stringify(migratedConfig, null, 2));
+  console.log('[Server] Config saved successfully');
+
+  // Reload config
+  delete require.cache[require.resolve('./config')];
+  const newConfig = require('./config');
+  console.log('[Server] Config reloaded');
+} else {
+  console.log('[Server] No migration needed');
+}
+
 // Start output engine
 outputEngine.start();
 
 // Get server configuration
-const cfg = config.get();
-const serverPort = cfg.server?.port || PORT;
-const serverBindAddress = cfg.server?.bindAddress || '0.0.0.0';
+const serverCfg = config.get();
+const serverPort = serverCfg.server?.port || PORT;
+const serverBindAddress = serverCfg.server?.bindAddress || '0.0.0.0';
 
 // Start server
 server.listen(serverPort, serverBindAddress, () => {

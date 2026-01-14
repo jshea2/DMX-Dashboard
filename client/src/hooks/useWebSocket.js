@@ -30,9 +30,18 @@ const useWebSocket = () => {
   const authenticated = useRef(false);
 
   const connect = useCallback(() => {
+    // Close existing connection if it exists
+    if (ws.current) {
+      try {
+        ws.current.close();
+      } catch (e) {
+        console.warn('Error closing existing WebSocket:', e);
+      }
+    }
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // In dev mode, React runs on 3001 but backend/WebSocket is on 3000
-    const wsPort = process.env.NODE_ENV === 'development' ? 3000 : (window.location.port || 3000);
+    // In dev mode, React runs on 3001 but backend/WebSocket is on 2996
+    const wsPort = process.env.NODE_ENV === 'development' ? 2996 : (window.location.port || 2996);
     const wsUrl = `${protocol}//${window.location.hostname}:${wsPort}`;
 
     ws.current = new WebSocket(wsUrl);
@@ -44,10 +53,12 @@ const useWebSocket = () => {
 
       // Send authentication
       const clientId = getClientId();
-      ws.current.send(JSON.stringify({
-        type: 'auth',
-        clientId: clientId
-      }));
+      if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+        ws.current.send(JSON.stringify({
+          type: 'auth',
+          clientId: clientId
+        }));
+      }
     };
 
     ws.current.onmessage = (event) => {
@@ -108,9 +119,25 @@ const useWebSocket = () => {
   }, []);
 
   useEffect(() => {
+    console.log('[useWebSocket] Effect running - calling connect()');
     connect();
 
+    // Handle page visibility changes (e.g., computer waking from sleep)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Check if connection is stale when page becomes visible
+        if (ws.current && ws.current.readyState !== WebSocket.OPEN && ws.current.readyState !== WebSocket.CONNECTING) {
+          console.log('Page visible and WebSocket not open, reconnecting...');
+          connect();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      console.log('[useWebSocket] Cleanup running - closing WebSocket');
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (reconnectTimeout.current) {
         clearTimeout(reconnectTimeout.current);
       }
@@ -118,24 +145,42 @@ const useWebSocket = () => {
         ws.current.close();
       }
     };
-  }, [connect]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
 
   const sendUpdate = useCallback((updates) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'update',
-        data: updates
-      }));
+      try {
+        ws.current.send(JSON.stringify({
+          type: 'update',
+          data: updates
+        }));
+      } catch (error) {
+        console.warn('Failed to send update, reconnecting...', error);
+        connect();
+      }
+    } else {
+      console.warn('WebSocket not ready, cannot send update. State:', ws.current?.readyState);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // connect is accessed via closure, no need to include it as dependency
 
-  const requestAccess = useCallback(() => {
+  const requestAccess = useCallback((dashboardId) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify({
-        type: 'requestAccess'
-      }));
+      try {
+        ws.current.send(JSON.stringify({
+          type: 'requestAccess',
+          dashboardId: dashboardId
+        }));
+      } catch (error) {
+        console.warn('Failed to send access request, reconnecting...', error);
+        connect();
+      }
+    } else {
+      console.warn('WebSocket not ready, cannot request access. State:', ws.current?.readyState);
     }
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // connect is accessed via closure, no need to include it as dependency
 
   const getDashboardRole = useCallback((dashboardId) => {
     // Return dashboard-specific role if available, otherwise fall back to global role

@@ -35,9 +35,9 @@ const AccessRequestNotification = ({ pendingRequests, onApprove, onDeny }) => {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {pendingRequests.map((client) => (
+        {pendingRequests.map((request, idx) => (
           <div
-            key={client.id}
+            key={`${request.clientId}-${request.dashboardId || 'global'}-${idx}`}
             style={{
               padding: '12px',
               background: '#2a2a2a',
@@ -46,12 +46,17 @@ const AccessRequestNotification = ({ pendingRequests, onApprove, onDeny }) => {
           >
             <div style={{ marginBottom: '10px' }}>
               <div style={{ fontWeight: '500', color: '#f0f0f0', fontSize: '14px' }}>
-                User {client.nickname || client.shortId} is requesting Controller access
+                User {request.clientNickname || request.shortId} is requesting Controller access
+                {request.type === 'dashboard' && (
+                  <div style={{ fontSize: '12px', color: '#888', marginTop: '4px' }}>
+                    for dashboard: <span style={{ color: '#4a90e2' }}>{request.dashboardName}</span>
+                  </div>
+                )}
               </div>
             </div>
             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
               <button
-                onClick={() => onApprove(client.id)}
+                onClick={() => onApprove(request.clientId, request.dashboardId)}
                 style={{
                   padding: '8px 16px',
                   fontSize: '12px',
@@ -73,7 +78,7 @@ const AccessRequestNotification = ({ pendingRequests, onApprove, onDeny }) => {
                 Approve
               </button>
               <button
-                onClick={() => onDeny(client.id)}
+                onClick={() => onDeny(request.clientId, request.dashboardId)}
                 style={{
                   padding: '8px 16px',
                   fontSize: '12px',

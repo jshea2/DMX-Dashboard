@@ -67,6 +67,7 @@ const DEFAULT_CONFIG = {
       id: 'panel1',
       name: 'RGB Panel 1',
       profileId: 'rgb-3ch',
+      colorMode: 'rgb', // 'rgb' or 'hsv' - how to display/store color data
       universe: 1,
       startAddress: 1,
       showOnMain: true,
@@ -76,6 +77,7 @@ const DEFAULT_CONFIG = {
       id: 'panel2',
       name: 'RGB Panel 2',
       profileId: 'rgb-3ch',
+      colorMode: 'rgb',
       universe: 1,
       startAddress: 4,
       showOnMain: true,
@@ -107,8 +109,8 @@ const DEFAULT_CONFIG = {
       color: 'orange',
       tags: [],
       targets: {
-        panel1: { hue: 30, brightness: 75 },
-        panel2: { hue: 30, brightness: 75 },
+        panel1: { hue: 30, sat: 100, brightness: 75 },
+        panel2: { hue: 30, sat: 100, brightness: 75 },
         par1: { intensity: 60 },
         par2: { intensity: 60 }
       }
@@ -119,8 +121,8 @@ const DEFAULT_CONFIG = {
       color: 'cyan',
       tags: [],
       targets: {
-        panel1: { hue: 200, brightness: 70 },
-        panel2: { hue: 200, brightness: 70 },
+        panel1: { hue: 200, sat: 100, brightness: 70 },
+        panel2: { hue: 200, sat: 100, brightness: 70 },
         par1: { intensity: 50 },
         par2: { intensity: 50 }
       }
@@ -131,8 +133,8 @@ const DEFAULT_CONFIG = {
       color: 'purple',
       tags: [],
       targets: {
-        panel1: { hue: 280, brightness: 85 },
-        panel2: { hue: 120, brightness: 85 },
+        panel1: { hue: 280, sat: 100, brightness: 85 },
+        panel2: { hue: 120, sat: 100, brightness: 85 },
         par1: { intensity: 70 },
         par2: { intensity: 70 }
       }
@@ -257,6 +259,7 @@ class Config {
             type: "fixture",
             id: fixture.id,
             visible: fixture.showOnMain !== false,
+            displayMode: 'sliders', // 'sliders' or 'colorwheel' for RGB fixtures
             order: index
           });
         });
@@ -318,10 +321,12 @@ class Config {
   ensureLayoutAccessControl(config) {
     // Migrate layouts to include access control fields for multi-dashboard system
     if (config.showLayouts) {
+      const hasManyDashboards = config.showLayouts.length > 1;
+
       config.showLayouts.forEach(layout => {
-        // Add showReturnToMenuButton (default: true)
+        // Add showReturnToMenuButton (default: false for single dashboard, true for multiple)
         if (layout.showReturnToMenuButton === undefined) {
-          layout.showReturnToMenuButton = true;
+          layout.showReturnToMenuButton = hasManyDashboards;
         }
 
         // Add showSettingsButton if missing (default: true)

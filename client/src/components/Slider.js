@@ -14,7 +14,9 @@ const Slider = ({
   isFrozen = false,      // Boolean: is this channel frozen after recording?
   lookIntensity = 1,     // Float 0-1: highest look intensity controlling this channel
   hasManualValue = false, // Boolean: has channel been manually adjusted?
-  disabled = false       // Boolean: disable slider for viewers
+  disabled = false,      // Boolean: disable slider for viewers
+  customThumbColor = null, // Optional: custom RGB string for thumb color (e.g., 'rgb(255, 128, 0)')
+  customTrackGradient = null // Optional: custom gradient string for track (e.g., 'linear-gradient(to right, #000, rgb(255,0,0))')
 }) => {
   const displayValue = unit === '°' ? Math.round(value) : Math.round(value);
 
@@ -38,6 +40,12 @@ const Slider = ({
 
   // Get slider track gradient style
   const getSliderStyle = () => {
+    // Use custom track gradient if provided
+    if (customTrackGradient) {
+      return {
+        background: customTrackGradient
+      };
+    }
     if (color === 'white' || color === 'intensity') {
       return {
         background: `linear-gradient(to right, #222 0%, #fff 100%)`
@@ -55,11 +63,19 @@ const Slider = ({
 
   // Get thumb style for sliders with outline-fill effect (outline at 0%, solid at 100%)
   const getLookThumbStyle = () => {
+    // If custom thumb color is provided, use it
+    if (customThumbColor) {
+      return {
+        '--thumb-bg': customThumbColor,
+        '--thumb-border': customThumbColor
+      };
+    }
+
     if (!hasOutlineFillThumb || !colorMap[color]) return {};
-    
+
     const rgb = colorMap[color];
     const intensity = value / max; // 0 to 1
-    
+
     // At 0%: outline color, black center
     // At 100%: solid color
     return {

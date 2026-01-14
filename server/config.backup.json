@@ -1,0 +1,303 @@
+{
+  "fixtureProfiles": [
+    {
+      "id": "rgb-3ch",
+      "name": "LED Par (3ch RGB)",
+      "channels": [
+        {
+          "name": "red",
+          "offset": 0,
+          "type": "RGB",
+          "groupId": "rgb-1767848767150",
+          "locked": true
+        },
+        {
+          "name": "green",
+          "offset": 1,
+          "type": "RGB",
+          "groupId": "rgb-1767848767150",
+          "locked": true
+        },
+        {
+          "name": "blue",
+          "offset": 2,
+          "type": "RGB",
+          "groupId": "rgb-1767848767150",
+          "locked": true
+        }
+      ]
+    },
+    {
+      "id": "intensity-1ch",
+      "name": "Dimmer (1ch)",
+      "channels": [
+        {
+          "name": "intensity",
+          "offset": 0
+        }
+      ]
+    }
+  ],
+  "network": {
+    "protocol": "sacn",
+    "sacn": {
+      "universe": 1,
+      "priority": 1,
+      "multicast": true,
+      "unicastDestinations": [
+        "10.101.52.107"
+      ],
+      "bindAddress": "10.101.100.56"
+    },
+    "artnet": {
+      "net": 0,
+      "subnet": 0,
+      "universe": 0,
+      "destination": "255.255.255.255",
+      "port": 6454,
+      "bindAddress": ""
+    },
+    "outputFps": 30
+  },
+  "server": {
+    "port": 2996,
+    "bindAddress": "0.0.0.0"
+  },
+  "fixtures": [
+    {
+      "id": "fixture-1767849886974",
+      "name": "Front L",
+      "profileId": "rgb-3ch",
+      "universe": 7,
+      "startAddress": 1,
+      "showOnMain": true,
+      "tags": [
+        "Front"
+      ],
+      "colorMode": "hsv"
+    },
+    {
+      "id": "fixture-1767851045109-0",
+      "name": "Front R",
+      "profileId": "rgb-3ch",
+      "universe": 7,
+      "startAddress": 4,
+      "showOnMain": true,
+      "tags": [
+        "Front"
+      ]
+    },
+    {
+      "id": "fixture-1767851059475",
+      "name": "Back Light",
+      "profileId": "intensity-1ch",
+      "universe": 7,
+      "startAddress": 7,
+      "showOnMain": true,
+      "tags": [
+        "Back"
+      ]
+    },
+    {
+      "id": "fixture-1767851099827-0",
+      "name": "Rim Light",
+      "profileId": "intensity-1ch",
+      "universe": 7,
+      "startAddress": 9,
+      "showOnMain": true,
+      "tags": [
+        "Diag Back"
+      ]
+    }
+  ],
+  "looks": [
+    {
+      "id": "look1",
+      "name": "Warm Dramatic",
+      "targets": {
+        "fixture-1767849886974": {
+          "red": 100,
+          "green": 87,
+          "blue": 80
+        },
+        "fixture-1767851045109-0": {
+          "red": 100,
+          "green": 48
+        },
+        "fixture-1767851059475": {
+          "intensity": 46
+        }
+      },
+      "showRecordButton": true,
+      "color": "orange",
+      "tags": [
+        "New Layout"
+      ]
+    },
+    {
+      "id": "look2",
+      "name": "Cool Dramatic",
+      "targets": {
+        "fixture-1767849886974": {
+          "red": 43,
+          "green": 64,
+          "blue": 100
+        },
+        "fixture-1767851045109-0": {
+          "red": 78,
+          "green": 83,
+          "blue": 100
+        },
+        "fixture-1767851059475": {
+          "intensity": 6
+        },
+        "fixture-1767851099827-0": {
+          "intensity": 67
+        }
+      },
+      "showRecordButton": true,
+      "color": "cyan",
+      "tags": []
+    },
+    {
+      "id": "look3",
+      "name": "Vibrant",
+      "targets": {
+        "fixture-1767849886974": {
+          "hue": 63.59,
+          "sat": 100,
+          "brightness": 100
+        }
+      },
+      "showRecordButton": true,
+      "color": "purple",
+      "tags": []
+    }
+  ],
+  "settings": {
+    "requirePassword": false,
+    "password": ""
+  },
+  "showLayouts": [
+    {
+      "id": "layout-1768023085493",
+      "name": "New Dashboard",
+      "urlSlug": "new-dashboard",
+      "showName": true,
+      "backgroundColor": "#1a1a2e",
+      "logo": null,
+      "title": "Lighting",
+      "showBlackoutButton": true,
+      "showLayoutSelector": true,
+      "showReturnToMenuButton": false,
+      "showSettingsButton": true,
+      "showConnectedUsers": true,
+      "accessControl": {
+        "defaultRole": "viewer",
+        "requireExplicitAccess": false
+      },
+      "sections": [
+        {
+          "id": "section-looks",
+          "name": "Looks",
+          "type": "static",
+          "staticType": "looks",
+          "visible": true,
+          "showClearButton": true,
+          "order": 0,
+          "items": [
+            {
+              "type": "look",
+              "id": "look1",
+              "visible": true,
+              "order": 0
+            },
+            {
+              "type": "look",
+              "id": "look2",
+              "visible": true,
+              "order": 1
+            },
+            {
+              "type": "look",
+              "id": "look3",
+              "visible": true,
+              "order": 2
+            }
+          ]
+        },
+        {
+          "id": "section-fixtures",
+          "name": "Fixtures",
+          "type": "static",
+          "staticType": "fixtures",
+          "visible": true,
+          "showClearButton": true,
+          "order": 1,
+          "items": [
+            {
+              "type": "fixture",
+              "id": "fixture-1767849886974",
+              "visible": true,
+              "order": 0,
+              "displayMode": "colorwheel"
+            },
+            {
+              "type": "fixture",
+              "id": "fixture-1767851045109-0",
+              "visible": true,
+              "order": 1
+            },
+            {
+              "type": "fixture",
+              "id": "fixture-1767851059475",
+              "visible": true,
+              "order": 2
+            },
+            {
+              "type": "fixture",
+              "id": "fixture-1767851099827-0",
+              "visible": true,
+              "order": 3
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "id": "565a3b4d-7a40-4280-a10b-868dcf624c6d",
+      "role": "editor",
+      "nickname": "Server",
+      "pendingRequest": false,
+      "firstSeen": 1767872476031,
+      "lastSeen": 1768284236718,
+      "lastIp": "127.0.0.1",
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+      "dashboardAccess": {
+        "layout-1767749188450": "editor",
+        "layout-1767858289326": "editor",
+        "layout-1768023085493": "editor"
+      }
+    },
+    {
+      "id": "e20a7b88-c0bf-4d08-a62a-0948bf253baf",
+      "role": "viewer",
+      "nickname": "",
+      "pendingRequest": false,
+      "firstSeen": 1768209010662,
+      "lastSeen": 1768210770834,
+      "lastIp": "192.168.99.200",
+      "userAgent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1",
+      "dashboardAccess": {
+        "layout-1768023085493": "controller"
+      },
+      "dashboardPendingRequests": {}
+    }
+  ],
+  "webServer": {
+    "defaultClientRole": "viewer"
+  },
+  "activeLayoutId": "layout-1768023085493"
+}

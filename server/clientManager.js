@@ -109,7 +109,7 @@ class ClientManager {
     return Array.from(this.activeConnections.keys());
   }
 
-  // Request editor access
+  // Request editor access (legacy - kept for compatibility)
   requestAccess(clientId) {
     const currentConfig = config.get();
     const client = currentConfig.clients.find(c => c.id === clientId);
@@ -124,26 +124,72 @@ class ClientManager {
     return false;
   }
 
-  // Approve client (promote to controller)
-  approveClient(clientId) {
+  // Request access for specific dashboard
+  requestDashboardAccess(clientId, dashboardId) {
     const currentConfig = config.get();
     const client = currentConfig.clients.find(c => c.id === clientId);
 
     if (client) {
-      client.role = 'controller';
-      client.pendingRequest = false;
-      config.update(currentConfig);
-      console.log(`Client approved: ${clientId.substring(0, 6)} promoted to controller`);
-
-      // Notify the client if they're connected
-      const connection = this.getActive(clientId);
-      if (connection && connection.ws) {
-        connection.ws.send(JSON.stringify({
-          type: 'roleUpdate',
-          role: 'controller'
-        }));
+      // Initialize dashboardPendingRequests if missing
+      if (!client.dashboardPendingRequests) {
+        client.dashboardPendingRequests = {};
       }
 
+      client.dashboardPendingRequests[dashboardId] = true;
+      config.update(currentConfig);
+      console.log(`Dashboard access requested by: ${clientId.substring(0, 6)} for dashboard ${dashboardId}`);
+      return true;
+    }
+
+    return false;
+  }
+
+  // Approve client (promote to controller) - can be global or per-dashboard
+  approveClient(clientId, dashboardId = null) {
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (client) {
+      if (dashboardId) {
+        // Per-dashboard approval
+        if (!client.dashboardAccess) {
+          client.dashboardAccess = {};
+        }
+        client.dashboardAccess[dashboardId] = 'controller';
+
+        // Clear pending request for this dashboard
+        if (client.dashboardPendingRequests) {
+          delete client.dashboardPendingRequests[dashboardId];
+        }
+
+        console.log(`Client approved: ${clientId.substring(0, 6)} promoted to controller on dashboard ${dashboardId}`);
+
+        // Notify the client if they're connected
+        const connection = this.getActive(clientId);
+        if (connection && connection.ws) {
+          connection.ws.send(JSON.stringify({
+            type: 'dashboardRoleUpdate',
+            dashboardId: dashboardId,
+            role: 'controller'
+          }));
+        }
+      } else {
+        // Global approval (legacy)
+        client.role = 'controller';
+        client.pendingRequest = false;
+        console.log(`Client approved: ${clientId.substring(0, 6)} promoted to controller globally`);
+
+        // Notify the client if they're connected
+        const connection = this.getActive(clientId);
+        if (connection && connection.ws) {
+          connection.ws.send(JSON.stringify({
+            type: 'roleUpdate',
+            role: 'controller'
+          }));
+        }
+      }
+
+      config.update(currentConfig);
       return true;
     }
 
@@ -166,6 +212,32 @@ class ClientManager {
         connection.ws.send(JSON.stringify({
           type: 'accessDenied',
           message: 'Your access request was denied'
+        }));
+      }
+
+      return true;
+    }
+
+    return false;
+  }
+
+  // Deny dashboard-specific access request
+  denyDashboardRequest(clientId, dashboardId) {
+    const currentConfig = config.get();
+    const client = currentConfig.clients.find(c => c.id === clientId);
+
+    if (client && client.dashboardPendingRequests) {
+      delete client.dashboardPendingRequests[dashboardId];
+      config.update(currentConfig);
+      console.log(`Client denied: ${clientId.substring(0, 6)} access request rejected for dashboard ${dashboardId}`);
+
+      // Notify the client if they're connected
+      const connection = this.getActive(clientId);
+      if (connection && connection.ws) {
+        connection.ws.send(JSON.stringify({
+          type: 'dashboardAccessDenied',
+          dashboardId: dashboardId,
+          message: 'Your access request was denied for this dashboard'
         }));
       }
 
@@ -287,7 +359,13 @@ class ClientManager {
   // ===== PER-DASHBOARD PERMISSION METHODS =====
 
   // Get user's role for specific dashboard
-  getDashboardRole(clientId, dashboardId) {
+  getDashboardRole(clientId, dashboardId, req = null) {
+    // Localhost is always editor
+    if (req && this.isLocalhost(req)) {
+      console.log(`[getDashboardRole] ${clientId.substring(0, 6)} detected as localhost -> editor`);
+      return 'editor';
+    }
+
     const currentConfig = config.get();
     const client = currentConfig.clients.find(c => c.id === clientId);
 

@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getClientId } from '../utils/clientIdentity';
+import useWebSocket from '../hooks/useWebSocket';
 import './DashboardMenu.css';
 
 function DashboardMenu() {
   const navigate = useNavigate();
+  const { isEditorAnywhere } = useWebSocket();
   const [dashboards, setDashboards] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -21,8 +23,12 @@ function DashboardMenu() {
         setDashboards(data);
         setLoading(false);
 
-        // Auto-redirect if only one dashboard accessible
-        if (data.length === 1) {
+        // Auto-redirect based on number of dashboards
+        if (data.length === 0) {
+          // No dashboards - redirect to settings so editor can create one
+          navigate('/settings', { replace: true });
+        } else if (data.length === 1) {
+          // Only one dashboard - go directly to it
           navigate(`/dashboard/${data[0].urlSlug}`, { replace: true });
         }
       })
@@ -80,6 +86,38 @@ function DashboardMenu() {
 
   return (
     <div className="dashboard-menu">
+      {isEditorAnywhere && (
+        <button
+          className="settings-btn"
+          onClick={() => navigate('/settings')}
+          style={{
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            width: '60px',
+            height: '60px',
+            borderRadius: '50%',
+            background: '#4a90e2',
+            color: 'white',
+            border: 'none',
+            fontSize: '28px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
+            transition: 'background 0.2s, transform 0.1s',
+            zIndex: 1000
+          }}
+          onMouseEnter={(e) => e.target.style.background = '#357abd'}
+          onMouseLeave={(e) => e.target.style.background = '#4a90e2'}
+          onMouseDown={(e) => e.target.style.transform = 'scale(0.95)'}
+          onMouseUp={(e) => e.target.style.transform = 'scale(1)'}
+        >
+          ⚙
+        </button>
+      )}
+
       <div className="menu-header">
         <h1>Select Dashboard</h1>
         <p className="menu-subtitle">Choose a dashboard to view</p>
