@@ -18,12 +18,12 @@ const LOOK_COLORS = [
 
 const TABS = [
   { id: 'showlayout', label: 'Dashboard' },
+  { id: 'users', label: 'Users and Access' },
+  { id: 'network', label: 'Networking / IO' },
   { id: 'profiles', label: 'Fixture Profiles' },
   { id: 'patching', label: 'Patch' },
   { id: 'looks', label: 'Looks' },
   { id: 'cuelist', label: 'Cue List' },
-  { id: 'network', label: 'Networking / IO' },
-  { id: 'users', label: 'Users and Access' },
   { id: 'export', label: 'Export / Import' },
 ];
 
@@ -1013,14 +1013,40 @@ const SettingsPage = () => {
   };
 
   // === QR CODE FUNCTIONS ===
-  const downloadQRCode = (interfaceAddress) => {
-    const canvas = document.getElementById(`qr-canvas-${interfaceAddress}`)?.querySelector('canvas');
-    if (canvas) {
-      const url = canvas.toDataURL('image/png');
-      const link = document.createElement('a');
-      link.download = `dmx-control-${interfaceAddress}.png`;
-      link.href = url;
-      link.click();
+  const downloadQRCode = (interfaceAddress, dashboardSlug = null) => {
+    // For dashboard-specific QR codes, generate on-the-fly
+    if (dashboardSlug) {
+      // Create a temporary canvas to generate the QR code
+      const tempCanvas = document.createElement('canvas');
+      const qrCodeUrl = getQRCodeURL(interfaceAddress, dashboardSlug);
+
+      // Import QRCode library dynamically
+      import('qrcode').then(QRCode => {
+        QRCode.toCanvas(tempCanvas, qrCodeUrl, { width: 300, margin: 2 }, (error) => {
+          if (error) {
+            console.error('QR Code generation error:', error);
+            return;
+          }
+          const url = tempCanvas.toDataURL('image/png');
+          const link = document.createElement('a');
+          link.download = `${dashboardSlug}-${interfaceAddress}.png`;
+          link.href = url;
+          link.click();
+        });
+      }).catch(() => {
+        // Fallback: try to find the canvas element directly
+        alert('Please try again. QR code download is processing...');
+      });
+    } else {
+      // Original behavior for global QR codes
+      const canvas = document.getElementById(`qr-canvas-${interfaceAddress}`)?.querySelector('canvas');
+      if (canvas) {
+        const url = canvas.toDataURL('image/png');
+        const link = document.createElement('a');
+        link.download = `dmx-control-${interfaceAddress}.png`;
+        link.href = url;
+        link.click();
+      }
     }
   };
 
@@ -1507,7 +1533,7 @@ const SettingsPage = () => {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px' }}>
                   <thead>
                     <tr style={{ background: '#1a1a2e' }}>
-                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #333', position: 'sticky', left: 0, background: '#1a1a2e', zIndex: 2 }}>
+                      <th style={{ padding: '12px', textAlign: 'left', borderBottom: '2px solid #333', position: 'sticky', left: 0, background: '#1a1a2e', zIndex: 2, minWidth: '250px' }}>
                         Client
                       </th>
                       {config.showLayouts.map((layout) => (
@@ -1515,27 +1541,72 @@ const SettingsPage = () => {
                           {layout.name}
                         </th>
                       ))}
+                      <th style={{ padding: '12px', textAlign: 'center', borderBottom: '2px solid #333', minWidth: '80px' }}>
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {config.clients.map((client) => {
                       const shortId = client.id.substring(0, 6).toUpperCase();
                       const isActive = activeClients.some(ac => ac.id === client.id);
+                      const lastSeenDate = client.lastSeen ? new Date(client.lastSeen).toLocaleDateString() : 'Never';
+                      const lastSeenTime = client.lastSeen ? new Date(client.lastSeen).toLocaleTimeString() : '';
 
                       return (
                         <tr key={client.id} style={{ borderBottom: '1px solid #2a2a2a' }}>
                           <td style={{ padding: '12px', position: 'sticky', left: 0, background: '#16213e', borderRight: '2px solid #333' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <div
-                                style={{
-                                  width: '8px',
-                                  height: '8px',
-                                  borderRadius: '50%',
-                                  background: isActive ? '#4ae24a' : '#666',
-                                  flexShrink: 0
-                                }}
-                              />
-                              <span style={{ fontWeight: '600' }}>{client.nickname || shortId}</span>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div
+                                  style={{
+                                    width: '8px',
+                                    height: '8px',
+                                    borderRadius: '50%',
+                                    background: isActive ? '#4ae24a' : '#666',
+                                    flexShrink: 0
+                                  }}
+                                />
+                                <input
+                                  type="text"
+                                  value={client.nickname || ''}
+                                  placeholder={shortId}
+                                  onChange={(e) => {
+                                    const newNickname = e.target.value;
+                                    fetch(`/api/clients/${client.id}/nickname`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ nickname: newNickname })
+                                    })
+                                      .then(res => res.json())
+                                      .then(() => fetchConfig())
+                                      .catch(err => console.error('Failed to update nickname:', err));
+                                  }}
+                                  style={{
+                                    padding: '4px 8px',
+                                    fontSize: '12px',
+                                    fontWeight: '600',
+                                    background: '#252538',
+                                    color: '#f0f0f0',
+                                    border: '1px solid #333',
+                                    borderRadius: '4px',
+                                    outline: 'none',
+                                    flex: 1,
+                                    minWidth: '120px'
+                                  }}
+                                  onFocus={(e) => {
+                                    e.target.style.borderColor = '#4a90e2';
+                                  }}
+                                  onBlur={(e) => {
+                                    e.target.style.borderColor = '#333';
+                                  }}
+                                />
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#888', paddingLeft: '16px' }}>
+                                <div>ID: {shortId}</div>
+                                <div>Last seen: {lastSeenDate} {lastSeenTime}</div>
+                                {client.lastIp && <div>IP: {client.lastIp}</div>}
+                              </div>
                             </div>
                           </td>
                           {config.showLayouts.map((layout) => {
@@ -1553,14 +1624,35 @@ const SettingsPage = () => {
                                 <select
                                   value={dashboardRole}
                                   onChange={(e) => {
-                                    fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
-                                      method: 'POST',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ role: e.target.value })
-                                    })
-                                      .then(res => res.json())
-                                      .then(() => fetchConfig())
-                                      .catch(err => console.error('Failed to update role:', err));
+                                    const newRole = e.target.value;
+
+                                    // If setting to Editor, apply to ALL dashboards
+                                    if (newRole === 'editor') {
+                                      if (window.confirm(`Making this user an Editor will grant them Editor access to ALL dashboards. Continue?`)) {
+                                        // Update all dashboards
+                                        const updatePromises = config.showLayouts.map(layout =>
+                                          fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ role: 'editor' })
+                                          })
+                                        );
+
+                                        Promise.all(updatePromises)
+                                          .then(() => fetchConfig())
+                                          .catch(err => console.error('Failed to update roles:', err));
+                                      }
+                                    } else {
+                                      // Normal per-dashboard role update
+                                      fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ role: newRole })
+                                      })
+                                        .then(res => res.json())
+                                        .then(() => fetchConfig())
+                                        .catch(err => console.error('Failed to update role:', err));
+                                    }
                                   }}
                                   style={{
                                     padding: '6px 8px',
@@ -1582,6 +1674,32 @@ const SettingsPage = () => {
                               </td>
                             );
                           })}
+                          <td style={{ padding: '8px', textAlign: 'center' }}>
+                            <button
+                              onClick={() => {
+                                if (window.confirm(`Are you sure you want to remove client "${client.nickname || shortId}"? This will delete them from all dashboards.`)) {
+                                  fetch(`/api/clients/${client.id}`, {
+                                    method: 'DELETE'
+                                  })
+                                    .then(res => res.json())
+                                    .then(() => fetchConfig())
+                                    .catch(err => console.error('Failed to remove client:', err));
+                                }
+                              }}
+                              style={{
+                                padding: '6px 12px',
+                                fontSize: '11px',
+                                background: '#dc3545',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: '4px',
+                                cursor: 'pointer',
+                                fontWeight: '600'
+                              }}
+                            >
+                              Remove
+                            </button>
+                          </td>
                         </tr>
                       );
                     })}
@@ -2640,7 +2758,6 @@ const SettingsPage = () => {
 
           {(config.showLayouts || []).map((layout, layoutIndex) => {
             const isCollapsed = collapsedLayouts[layout.id];
-            const isActive = config.activeLayoutId === layout.id;
 
             return (
               <div
@@ -2649,8 +2766,8 @@ const SettingsPage = () => {
                 style={{
                   position: 'relative',
                   padding: isCollapsed ? '12px' : '16px',
-                  border: isActive ? '2px solid #4a90e2' : '1px solid #444',
-                  background: isActive ? '#2a3a4a' : '#333',
+                  border: '1px solid #444',
+                  background: '#333',
                   marginBottom: '12px'
                 }}
               >
@@ -2667,27 +2784,12 @@ const SettingsPage = () => {
                     onClick={(e) => e.stopPropagation()}
                     style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px' }}
                   />
-                  {isActive && (
-                    <span style={{ color: '#4a90e2', fontSize: '12px', fontWeight: '600', padding: '4px 8px', background: '#1a3a5a', borderRadius: '4px' }}>
-                      ACTIVE
-                    </span>
-                  )}
-                  {isCollapsed && !isActive && (
+                  {isCollapsed && (
                     <span style={{ color: '#666', fontSize: '12px' }}>
                       {(layout.sections || []).filter(s => s.visible !== false).length} visible sections
                     </span>
                   )}
                   <div style={{ display: 'flex', gap: '4px' }}>
-                    {!isActive && (
-                      <button
-                        className="btn btn-secondary btn-small"
-                        onClick={() => setActiveLayout(layout.id)}
-                        style={{ padding: '4px 8px', fontSize: '12px' }}
-                        title="Set as Active Layout"
-                      >
-                        Set Active
-                      </button>
-                    )}
                     <button
                       className="btn btn-secondary btn-small"
                       onClick={() => duplicateShowLayout(layoutIndex)}
@@ -2820,6 +2922,191 @@ const SettingsPage = () => {
                       />
                       <label htmlFor={`showConnectedUsers-${layout.id}`}>Show Connected Users Indicator</label>
                     </div>
+                  </div>
+
+                  {/* Dashboard URL and QR Code */}
+                  <div style={{ marginTop: '16px', padding: '12px', background: '#1a1a2e', borderRadius: '6px', border: '1px solid #333' }}>
+                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Dashboard Access</h4>
+
+                    <div className="form-group">
+                      <label>Dashboard URL</label>
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                        <input
+                          type="text"
+                          value={`${window.location.origin}/dashboard/${layout.urlSlug}`}
+                          readOnly
+                          style={{ flex: 1, fontFamily: 'monospace', fontSize: '12px', background: '#252538', border: '1px solid #333', color: '#4a90e2' }}
+                        />
+                        <button
+                          className="btn btn-secondary btn-small"
+                          onClick={() => {
+                            navigator.clipboard.writeText(`${window.location.origin}/dashboard/${layout.urlSlug}`);
+                            alert('URL copied to clipboard!');
+                          }}
+                          style={{ padding: '8px 12px', fontSize: '12px' }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                      <small>Direct link to this dashboard</small>
+                    </div>
+
+                    {/* QR Code for each network interface */}
+                    {networkInterfaces.length > 0 && (
+                      <div style={{ marginTop: '12px' }}>
+                        <label style={{ display: 'block', marginBottom: '8px' }}>QR Codes</label>
+                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                          {networkInterfaces.map((iface) => (
+                            <div
+                              key={iface.address}
+                              style={{
+                                padding: '8px',
+                                background: '#252538',
+                                borderRadius: '6px',
+                                border: '1px solid #333',
+                                textAlign: 'center'
+                              }}
+                            >
+                              <div style={{ fontSize: '11px', fontWeight: '600', marginBottom: '6px', color: '#888' }}>
+                                {iface.name}
+                              </div>
+                              <div style={{ background: 'white', padding: '8px', borderRadius: '4px', display: 'inline-block' }}>
+                                <QRCodeCanvas
+                                  value={getQRCodeURL(iface.address, layout.urlSlug)}
+                                  size={100}
+                                  level="M"
+                                />
+                              </div>
+                              <div style={{ fontSize: '10px', color: '#666', marginTop: '4px', fontFamily: 'monospace' }}>
+                                {getQRCodeURL(iface.address, layout.urlSlug)}
+                              </div>
+                              <button
+                                onClick={() => downloadQRCode(iface.address, layout.urlSlug)}
+                                style={{
+                                  marginTop: '6px',
+                                  padding: '4px 8px',
+                                  fontSize: '10px',
+                                  background: '#4ae24a',
+                                  color: '#000',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  cursor: 'pointer',
+                                  fontWeight: '600'
+                                }}
+                              >
+                                Download
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dashboard Users */}
+                  <div style={{ marginTop: '16px', padding: '12px', background: '#1a1a2e', borderRadius: '6px', border: '1px solid #333' }}>
+                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Users with Access</h4>
+                    <p style={{ fontSize: '12px', color: '#888', marginBottom: '12px' }}>
+                      Manage which users can access this dashboard. Click a user to change their role.
+                    </p>
+
+                    {config.clients && config.clients.filter(client => {
+                      const dashboardRole = client.dashboardAccess?.[layout.id] || client.role;
+                      const hasAccess = client.dashboardAccess?.[layout.id] || !layout.accessControl?.requireExplicitAccess;
+                      return hasAccess;
+                    }).length > 0 ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {config.clients.filter(client => {
+                          const hasAccess = client.dashboardAccess?.[layout.id] || !layout.accessControl?.requireExplicitAccess;
+                          return hasAccess;
+                        }).map((client) => {
+                          const shortId = client.id.substring(0, 6).toUpperCase();
+                          const isActive = activeClients.some(ac => ac.id === client.id);
+                          const dashboardRole = client.dashboardAccess?.[layout.id] || client.role || 'viewer';
+
+                          return (
+                            <div
+                              key={client.id}
+                              style={{
+                                padding: '8px',
+                                background: '#252538',
+                                borderRadius: '4px',
+                                border: `1px solid ${isActive ? '#4ae24a' : '#333'}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                                fontSize: '12px'
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: '6px',
+                                  height: '6px',
+                                  borderRadius: '50%',
+                                  background: isActive ? '#4ae24a' : '#666',
+                                  flexShrink: 0
+                                }}
+                              />
+                              <span style={{ fontWeight: '600', flex: 1 }}>
+                                {client.nickname || shortId}
+                              </span>
+                              <select
+                                value={dashboardRole}
+                                onChange={(e) => {
+                                  const newRole = e.target.value;
+
+                                  // If setting to Editor, apply to ALL dashboards
+                                  if (newRole === 'editor') {
+                                    if (window.confirm(`Making this user an Editor will grant them Editor access to ALL dashboards. Continue?`)) {
+                                      // Update all dashboards
+                                      const updatePromises = config.showLayouts.map(layout =>
+                                        fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ role: 'editor' })
+                                        })
+                                      );
+
+                                      Promise.all(updatePromises)
+                                        .then(() => fetchConfig())
+                                        .catch(err => console.error('Failed to update roles:', err));
+                                    }
+                                  } else {
+                                    // Normal per-dashboard role update
+                                    fetch(`/api/dashboards/${layout.id}/clients/${client.id}/role`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      body: JSON.stringify({ role: newRole })
+                                    })
+                                      .then(res => res.json())
+                                      .then(() => fetchConfig())
+                                      .catch(err => console.error('Failed to update role:', err));
+                                  }
+                                }}
+                                style={{
+                                  padding: '4px 6px',
+                                  fontSize: '11px',
+                                  background: '#1a1a2e',
+                                  border: '1px solid #333',
+                                  borderRadius: '3px',
+                                  color: '#f0f0f0',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <option value="viewer">Viewer</option>
+                                <option value="controller">Controller</option>
+                                <option value="moderator">Moderator</option>
+                                <option value="editor">Editor</option>
+                              </select>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p style={{ fontSize: '12px', color: '#666', fontStyle: 'italic', padding: '8px', background: '#252538', borderRadius: '4px' }}>
+                        No users have access to this dashboard yet.
+                      </p>
+                    )}
                   </div>
 
                   {/* Sections Configuration */}

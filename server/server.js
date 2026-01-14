@@ -247,17 +247,29 @@ app.delete('/api/dashboards/:dashboardId/clients/:clientId', (req, res) => {
 // Note: This endpoint will need client authentication to determine which client is making the request
 // For now, it returns all dashboards with their access control settings
 app.get('/api/dashboards/accessible', (req, res) => {
-  // TODO: Get clientId from session/auth
-  // For now, return all dashboards
+  const { clientId } = req.query;
+
+  if (!clientId) {
+    return res.status(400).json({ error: 'clientId is required' });
+  }
+
   const cfg = config.get();
-  const dashboards = (cfg.showLayouts || []).map(layout => ({
-    id: layout.id,
-    name: layout.name,
-    urlSlug: layout.urlSlug,
-    backgroundColor: layout.backgroundColor,
-    logo: layout.logo,
-    accessControl: layout.accessControl || { defaultRole: 'viewer', requireExplicitAccess: false }
-  }));
+  const dashboards = (cfg.showLayouts || []).map(layout => {
+    // Get the user's actual role for this dashboard
+    const userRole = clientManager.getDashboardRole(clientId, layout.id);
+    const hasAccess = clientManager.canAccessDashboard(clientId, layout.id);
+
+    return {
+      id: layout.id,
+      name: layout.name,
+      urlSlug: layout.urlSlug,
+      backgroundColor: layout.backgroundColor,
+      logo: layout.logo,
+      role: userRole,  // User's actual role for this dashboard
+      hasAccess: hasAccess,
+      accessControl: layout.accessControl || { defaultRole: 'viewer', requireExplicitAccess: false }
+    };
+  }).filter(dashboard => dashboard.hasAccess);  // Only return dashboards user can access
 
   res.json(dashboards);
 });

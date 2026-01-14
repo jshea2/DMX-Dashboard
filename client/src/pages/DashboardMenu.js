@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { getClientId } from '../utils/clientIdentity';
 import './DashboardMenu.css';
 
 function DashboardMenu() {
@@ -10,7 +11,8 @@ function DashboardMenu() {
 
   useEffect(() => {
     // Fetch accessible dashboards
-    fetch('/api/dashboards/accessible')
+    const clientId = getClientId();
+    fetch(`/api/dashboards/accessible?clientId=${clientId}`)
       .then(res => {
         if (!res.ok) throw new Error('Failed to fetch dashboards');
         return res.json();

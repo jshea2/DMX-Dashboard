@@ -69,7 +69,8 @@ const DEFAULT_CONFIG = {
       profileId: 'rgb-3ch',
       universe: 1,
       startAddress: 1,
-      showOnMain: true
+      showOnMain: true,
+      tags: []
     },
     {
       id: 'panel2',
@@ -77,7 +78,8 @@ const DEFAULT_CONFIG = {
       profileId: 'rgb-3ch',
       universe: 1,
       startAddress: 4,
-      showOnMain: true
+      showOnMain: true,
+      tags: []
     },
     {
       id: 'par1',
@@ -85,7 +87,8 @@ const DEFAULT_CONFIG = {
       profileId: 'intensity-1ch',
       universe: 1,
       startAddress: 7,
-      showOnMain: true
+      showOnMain: true,
+      tags: []
     },
     {
       id: 'par2',
@@ -93,7 +96,8 @@ const DEFAULT_CONFIG = {
       profileId: 'intensity-1ch',
       universe: 1,
       startAddress: 8,
-      showOnMain: true
+      showOnMain: true,
+      tags: []
     }
   ],
   looks: [
@@ -101,6 +105,7 @@ const DEFAULT_CONFIG = {
       id: 'look1',
       name: 'Warm Dramatic',
       color: 'orange',
+      tags: [],
       targets: {
         panel1: { hue: 30, brightness: 75 },
         panel2: { hue: 30, brightness: 75 },
@@ -112,6 +117,7 @@ const DEFAULT_CONFIG = {
       id: 'look2',
       name: 'Cool Dramatic',
       color: 'cyan',
+      tags: [],
       targets: {
         panel1: { hue: 200, brightness: 70 },
         panel2: { hue: 200, brightness: 70 },
@@ -123,6 +129,7 @@ const DEFAULT_CONFIG = {
       id: 'look3',
       name: 'Vibrant',
       color: 'purple',
+      tags: [],
       targets: {
         panel1: { hue: 280, brightness: 85 },
         panel2: { hue: 120, brightness: 85 },
@@ -151,6 +158,8 @@ class Config {
         config = this.ensureShowLayouts(config);
         // Migrate layout access control fields
         config = this.ensureLayoutAccessControl(config);
+        // Migrate tags for fixtures and looks
+        config = this.ensureTags(config);
         return config;
       }
     } catch (error) {
@@ -159,6 +168,7 @@ class Config {
     let config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
     config = this.ensureShowLayouts(config);
     config = this.ensureLayoutAccessControl(config);
+    config = this.ensureTags(config);
     return config;
   }
 
@@ -190,8 +200,8 @@ class Config {
       const layoutId = `layout-${Date.now()}`;
       const defaultLayout = {
         id: layoutId,
-        name: "Default Layout",
-        urlSlug: "home",
+        name: "Main Dashboard",
+        urlSlug: generateUrlSlug("Main Dashboard", []),
         showName: false,
         backgroundColor: "#1a1a2e",
         logo: null,
@@ -333,6 +343,27 @@ class Config {
           if (layout.accessControl.requireExplicitAccess === undefined) {
             layout.accessControl.requireExplicitAccess = false;
           }
+        }
+      });
+    }
+
+    return config;
+  }
+
+  ensureTags(config) {
+    // Add tags array to fixtures and looks for filtering and organization
+    if (config.fixtures) {
+      config.fixtures.forEach(fixture => {
+        if (!fixture.tags) {
+          fixture.tags = [];
+        }
+      });
+    }
+
+    if (config.looks) {
+      config.looks.forEach(look => {
+        if (!look.tags) {
+          look.tags = [];
         }
       });
     }

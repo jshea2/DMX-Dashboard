@@ -16,7 +16,8 @@
       "Bash(BROWSER=none npm start)",
       "Bash(cd /Users/joeshea/Documents/Github/NMS\\\\ DMX\\\\ App/client && PORT=3002 BROWSER=none npm start:*)",
       "Bash(PORT=3002 BROWSER=none npm start:*)",
-      "Bash(NODE_ENV=production npm start)"
+      "Bash(NODE_ENV=production npm start)",
+      "Bash(cat:*)"
     ]
   }
 }
