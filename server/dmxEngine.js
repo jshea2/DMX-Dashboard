@@ -46,6 +46,34 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function getDefaultValueForComponent(control, component) {
+  const defaultVal = control.defaultValue;
+  if (!defaultVal) {
+    if (component.type === 'intensity') return 0;
+    if (component.type === 'red' || component.type === 'green' || component.type === 'blue') return 100;
+    if (component.type === 'white' || component.type === 'amber') return 100;
+    return 0;
+  }
+
+  if (defaultVal.type === 'rgb') {
+    if (component.type === 'red') return (defaultVal.r || 0) * 100;
+    if (component.type === 'green') return (defaultVal.g || 0) * 100;
+    if (component.type === 'blue') return (defaultVal.b || 0) * 100;
+  } else if (defaultVal.type === 'rgbw') {
+    if (component.type === 'red') return (defaultVal.r || 0) * 100;
+    if (component.type === 'green') return (defaultVal.g || 0) * 100;
+    if (component.type === 'blue') return (defaultVal.b || 0) * 100;
+    if (component.type === 'white') return (defaultVal.w || 0) * 100;
+  } else if (defaultVal.type === 'scalar') {
+    return (defaultVal.v || 0) * 100;
+  } else if (defaultVal.type === 'xy') {
+    if (component.type === 'pan') return (defaultVal.x || 0.5) * 100;
+    if (component.type === 'tilt') return (defaultVal.y || 0.5) * 100;
+  }
+
+  return 0;
+}
+
 // Helper to get profile for a fixture
 function getProfile(cfg, fixture) {
   return cfg.fixtureProfiles?.find(p => p.id === fixture.profileId);
@@ -122,6 +150,7 @@ class DMXEngine {
       const universeKey = this.getUniverseKey(cfg, fixture);
       const universe = this.universes[universeKey];
       const profile = getProfile(cfg, fixture);
+      const isFixtureOverridden = currentState.overriddenFixtures?.[fixtureId]?.active;
 
       if (!universe || !profile) return;
 
@@ -129,6 +158,7 @@ class DMXEngine {
       if (profile.controls) {
         // New Control Blocks schema
         profile.controls.forEach(control => {
+          if (!control.components) return;
           control.components.forEach(component => {
             const channelName = component.name;
             const dmxAddress = fixture.startAddress + component.offset;
@@ -145,18 +175,21 @@ class DMXEngine {
               }
             }
 
-            // Source 2+: Each look's contribution (direct channel values)
-            cfg.looks.forEach(look => {
-              const lookLevel = currentState.looks[look.id] || 0;
-              if (lookLevel > 0 && look.targets[fixtureId]) {
-                const target = look.targets[fixtureId];
-                const targetValue = target[channelName];
-                if (targetValue > 0) {
-                  const effectiveValue = targetValue * lookLevel;
-                  sources.push(Math.round((effectiveValue / 100) * 255));
+            // Source 2+: Each look's contribution (blend from defaults unless overridden)
+            if (!isFixtureOverridden) {
+              cfg.looks.forEach(look => {
+                const lookLevel = currentState.looks[look.id] ?? 0;
+                if (look.targets[fixtureId]) {
+                  const target = look.targets[fixtureId];
+                  const targetValue = target[channelName];
+                  if (targetValue !== undefined) {
+                    const defaultValue = getDefaultValueForComponent(control, component);
+                    const effectiveValue = defaultValue + (targetValue - defaultValue) * lookLevel;
+                    sources.push(Math.round((effectiveValue / 100) * 255));
+                  }
                 }
-              }
-            });
+              });
+            }
 
             // Apply HTP: Take the highest value
             const maxValue = Math.max(0, ...sources);
@@ -182,18 +215,21 @@ class DMXEngine {
             }
           }
 
-          // Source 2+: Each look's contribution (direct channel values)
-          cfg.looks.forEach(look => {
-            const lookLevel = currentState.looks[look.id] || 0;
-            if (lookLevel > 0 && look.targets[fixtureId]) {
-              const target = look.targets[fixtureId];
-              const targetValue = target[channelName];
-              if (targetValue > 0) {
-                const effectiveValue = targetValue * lookLevel;
-                sources.push(Math.round((effectiveValue / 100) * 255));
+          // Source 2+: Each look's contribution (blend from defaults unless overridden)
+          if (!isFixtureOverridden) {
+            cfg.looks.forEach(look => {
+              const lookLevel = currentState.looks[look.id] ?? 0;
+              if (look.targets[fixtureId]) {
+                const target = look.targets[fixtureId];
+                const targetValue = target[channelName];
+                if (targetValue !== undefined) {
+                  const defaultValue = 0;
+                  const effectiveValue = defaultValue + (targetValue - defaultValue) * lookLevel;
+                  sources.push(Math.round((effectiveValue / 100) * 255));
+                }
               }
-            }
-          });
+            });
+          }
 
           // Apply HTP: Take the highest value
           const maxValue = Math.max(0, ...sources);

@@ -24,6 +24,7 @@ const useWebSocket = () => {
   const [showConnectedUsers, setShowConnectedUsers] = useState(true);
   const [dashboardAccess, setDashboardAccess] = useState({}); // Per-dashboard role assignments
   const [isEditorAnywhere, setIsEditorAnywhere] = useState(false); // True if editor on any dashboard
+  const [hsvCache, setHsvCache] = useState({});
 
   const ws = useRef(null);
   const reconnectTimeout = useRef(null);
@@ -187,6 +188,23 @@ const useWebSocket = () => {
     return dashboardAccess[dashboardId] || role || 'viewer';
   }, [dashboardAccess, role]);
 
+  const setFixtureHsv = useCallback((fixtureId, hsv) => {
+    setHsvCache(prev => ({
+      ...prev,
+      [fixtureId]: hsv
+    }));
+  }, []);
+
+  const resetFixtureHsv = useCallback((fixtureIds) => {
+    setHsvCache(prev => {
+      const next = { ...prev };
+      fixtureIds.forEach(id => {
+        next[id] = { h: 0, s: 0, v: 0 };
+      });
+      return next;
+    });
+  }, []);
+
   return {
     state,
     sendUpdate,
@@ -198,7 +216,10 @@ const useWebSocket = () => {
     showConnectedUsers,
     dashboardAccess,
     isEditorAnywhere,
-    getDashboardRole
+    getDashboardRole,
+    hsvCache,
+    setFixtureHsv,
+    resetFixtureHsv
   };
 };
 

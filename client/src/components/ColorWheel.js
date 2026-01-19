@@ -1,66 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import Slider from './Slider';
-
-// RGB to HSV conversion
-const rgbToHsv = (r, g, b) => {
-  r /= 100;
-  g /= 100;
-  b /= 100;
-
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const diff = max - min;
-
-  let h = 0;
-  let s = max === 0 ? 0 : (diff / max) * 100;
-  let v = max * 100;
-
-  if (diff !== 0) {
-    if (max === r) {
-      h = 60 * (((g - b) / diff) % 6);
-    } else if (max === g) {
-      h = 60 * (((b - r) / diff) + 2);
-    } else {
-      h = 60 * (((r - g) / diff) + 4);
-    }
-  }
-
-  if (h < 0) h += 360;
-
-  return { h: Math.round(h), s: Math.round(s), v: Math.round(v) };
-};
-
-// HSV to RGB conversion
-const hsvToRgb = (h, s, v) => {
-  s /= 100;
-  v /= 100;
-
-  const c = v * s;
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
-  const m = v - c;
-
-  let r = 0, g = 0, b = 0;
-
-  if (h >= 0 && h < 60) {
-    r = c; g = x; b = 0;
-  } else if (h >= 60 && h < 120) {
-    r = x; g = c; b = 0;
-  } else if (h >= 120 && h < 180) {
-    r = 0; g = c; b = x;
-  } else if (h >= 180 && h < 240) {
-    r = 0; g = x; b = c;
-  } else if (h >= 240 && h < 300) {
-    r = x; g = 0; b = c;
-  } else {
-    r = c; g = 0; b = x;
-  }
-
-  return {
-    r: Math.round((r + m) * 100),
-    g: Math.round((g + m) * 100),
-    b: Math.round((b + m) * 100)
-  };
-};
+import { rgbToHsv, hsvToRgb } from '../utils/color';
 
 const ColorWheel = ({
   // Can accept either RGB or HSV props
@@ -73,6 +13,13 @@ const ColorWheel = ({
   mode = 'rgb',         // 'rgb' or 'hsv' - determines which props to use and how to send updates
   onChange,             // (r, g, b) => {} when mode='rgb', (h, s, v) => {} when mode='hsv'
   disabled = false,
+  showWheel = true,
+  sliderMaxWidth = 200,
+  lockHueSat = false,
+  syncHueSatFromProps = false,
+  initialHsv = null,
+  customTrackGradient = null,
+  customThumbColor = null,
 
   // Highlight props (matching Slider.js)
   hasManualValue = false,
@@ -90,9 +37,19 @@ const ColorWheel = ({
   const internalHSVRef = useRef({ h: 0, s: 0, v: 0 });
   const [renderTrigger, setRenderTrigger] = useState(0);
   const isUpdatingFromProps = useRef(false);
+  const lastRgbRatioRef = useRef(null);
 
   // Track if user has ever set H/S manually
   const hasUserSetColor = useRef(false);
+
+  // Seed from initial HSV (dashboard/looks)
+  useEffect(() => {
+    if (!initialHsv) return;
+    internalHSVRef.current.h = initialHsv.h ?? 0;
+    internalHSVRef.current.s = initialHsv.s ?? 0;
+    internalHSVRef.current.v = initialHsv.v ?? 0;
+    setRenderTrigger(t => t + 1);
+  }, [initialHsv?.h, initialHsv?.s, initialHsv?.v]);
 
   // Sync from props
   useEffect(() => {
@@ -120,8 +77,8 @@ const ColorWheel = ({
 
     console.log(`[ColorWheel] Current internal: HSV(${internalHSVRef.current.h.toFixed(1)}, ${internalHSVRef.current.s.toFixed(1)}, ${internalHSVRef.current.v.toFixed(1)})`);
 
-    // If saturation is 0 (clear button), reset to white center
-    if (s === 0) {
+    // If saturation is 0 with brightness > 0 (white), reset to center
+    if (s === 0 && v > 0) {
       console.log('[ColorWheel] ✅ Saturation is 0 (clear button or white), resetting to center');
       hasUserSetColor.current = false;
       internalHSVRef.current.h = 0;
@@ -130,8 +87,21 @@ const ColorWheel = ({
       setRenderTrigger(t => t + 1);
       return;
     }
+    // If brightness is 0, preserve H/S so dimming doesn't shift hue
+    if (v === 0) {
+      internalHSVRef.current.v = v;
+      return;
+    }
 
     if (mode === 'hsv') {
+      if (lockHueSat) {
+        // Lock H/S to props; only allow V changes from slider
+        internalHSVRef.current.h = h;
+        internalHSVRef.current.s = s;
+        internalHSVRef.current.v = v;
+        setRenderTrigger(t => t + 1);
+        return;
+      }
       // HSV mode: Always sync from props (no conversion drift)
       console.log('[ColorWheel HSV] Syncing from props (no conversion issues)');
       internalHSVRef.current.h = h;
@@ -139,8 +109,32 @@ const ColorWheel = ({
       internalHSVRef.current.v = v;
       setRenderTrigger(t => t + 1);
     } else {
+      const comingFromBlack = internalHSVRef.current.v === 0 && v > 0;
+      const hasKnownHue = hasUserSetColor.current || lastRgbRatioRef.current;
+      let isBrightnessOnly = false;
+      if (v > 0) {
+        const max = Math.max(red, green, blue);
+        if (max > 0) {
+          const ratios = {
+            r: red / max,
+            g: green / max,
+            b: blue / max
+          };
+          if (lastRgbRatioRef.current) {
+            const dr = Math.abs(ratios.r - lastRgbRatioRef.current.r);
+            const dg = Math.abs(ratios.g - lastRgbRatioRef.current.g);
+            const db = Math.abs(ratios.b - lastRgbRatioRef.current.b);
+            if (dr < 0.02 && dg < 0.02 && db < 0.02) {
+              isBrightnessOnly = true;
+            }
+          }
+          lastRgbRatioRef.current = ratios;
+        }
+      }
+
       // RGB mode: Only update H and S if user hasn't set color (prevent conversion drift)
-      if (!hasUserSetColor.current && v > 0 && s > 0) {
+      // Avoid hue snaps at very low brightness values.
+      if (!isBrightnessOnly && !comingFromBlack && (syncHueSatFromProps || !hasUserSetColor.current) && v > 1 && s > 0) {
         console.log('[ColorWheel RGB] User has not set color yet, initializing H and S from props');
         internalHSVRef.current.h = h;
         internalHSVRef.current.s = s;
@@ -428,43 +422,45 @@ const ColorWheel = ({
 
   // Calculate RGB color for brightness slider thumb (current brightness)
   const thumbColor = hsvToRgb(internalHSVRef.current.h, internalHSVRef.current.s, internalHSVRef.current.v);
-  const thumbRgbString = `rgb(${Math.round(thumbColor.r * 2.55)}, ${Math.round(thumbColor.g * 2.55)}, ${Math.round(thumbColor.b * 2.55)})`;
+  const thumbRgbString = customThumbColor || `rgb(${Math.round(thumbColor.r * 2.55)}, ${Math.round(thumbColor.g * 2.55)}, ${Math.round(thumbColor.b * 2.55)})`;
 
   // Calculate full brightness color for track gradient (H and S at full V)
   const fullBrightnessColor = hsvToRgb(internalHSVRef.current.h, internalHSVRef.current.s, 100);
-  const trackGradient = `linear-gradient(to right, #111 0%, rgb(${Math.round(fullBrightnessColor.r * 2.55)}, ${Math.round(fullBrightnessColor.g * 2.55)}, ${Math.round(fullBrightnessColor.b * 2.55)}) 100%)`;
+  const trackGradient = customTrackGradient || `linear-gradient(to right, #111 0%, rgb(${Math.round(fullBrightnessColor.r * 2.55)}, ${Math.round(fullBrightnessColor.g * 2.55)}, ${Math.round(fullBrightnessColor.b * 2.55)}) 100%)`;
 
   return (
     <div className="colorwheel-container" style={getContainerOutlineStyle()}>
-      <div style={{ position: 'relative', display: 'inline-block' }}>
-        <canvas
-          ref={canvasRef}
-          width={wheelSize}
-          height={wheelSize}
-          className={`colorwheel-wheel${hasManualValue ? ' colorwheel-manual' : ''}`}
-          onMouseDown={handleMouseDown}
-          onTouchStart={handleMouseDown}
-          style={{
-            cursor: disabled ? 'not-allowed' : 'crosshair',
-            opacity: disabled ? 0.5 : 1,
-            display: 'block'
-          }}
-        />
+      {showWheel && (
+        <div style={{ position: 'relative', display: 'inline-block' }}>
+          <canvas
+            ref={canvasRef}
+            width={wheelSize}
+            height={wheelSize}
+            className={`colorwheel-wheel${hasManualValue ? ' colorwheel-manual' : ''}`}
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleMouseDown}
+            style={{
+              cursor: disabled ? 'not-allowed' : 'crosshair',
+              opacity: disabled ? 0.5 : 1,
+              display: 'block'
+            }}
+          />
 
-        {/* Handle indicator */}
-        <div
-          className="colorwheel-handle"
-          style={{
-            position: 'absolute',
-            left: `${handlePosition.x}px`,
-            top: `${handlePosition.y}px`,
-            pointerEvents: 'none'
-          }}
-        />
-      </div>
+          {/* Handle indicator */}
+          <div
+            className="colorwheel-handle"
+            style={{
+              position: 'absolute',
+              left: `${handlePosition.x}px`,
+              top: `${handlePosition.y}px`,
+              pointerEvents: 'none'
+            }}
+          />
+        </div>
+      )}
 
       {/* Brightness slider */}
-      <div style={{ width: '100%', maxWidth: '200px' }}>
+      <div style={{ width: '100%', maxWidth: sliderMaxWidth }}>
         <Slider
           label=""
           value={internalHSVRef.current.v}

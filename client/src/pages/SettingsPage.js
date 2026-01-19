@@ -439,7 +439,15 @@ const SettingsPage = () => {
     newConfig.fixtureProfiles.push({
       id: newId,
       name,
-      channels: [{ name: 'intensity', offset: 0 }]
+      controls: [{
+        id: `control-${Date.now()}`,
+        label: 'Dimmer',
+        domain: 'Intensity',
+        controlType: 'Intensity',
+        channelCount: 1,
+        components: [{ type: 'intensity', name: 'intensity', offset: 0 }],
+        defaultValue: { type: 'scalar', v: 0.0 }
+      }]
     });
     setConfig(newConfig);
   };
@@ -592,6 +600,12 @@ const SettingsPage = () => {
     ],
     Intensity: [
       { name: 'intensity', label: 'Intensity' }
+    ],
+    CCT: [
+      { name: 'cct', label: 'CCT' }
+    ],
+    Tint: [
+      { name: 'tint', label: 'Tint' }
     ]
   };
 
@@ -640,6 +654,30 @@ const SettingsPage = () => {
     const newConfig = { ...config };
     newConfig.fixtureProfiles[profileIndex].channels[channelIndex][field] = value;
     setConfig(newConfig);
+  };
+
+  const getProfileChannelCount = (profile) => {
+    if (!profile) return 1;
+    if (profile.controls && Array.isArray(profile.controls)) {
+      return profile.controls.reduce((sum, control) => {
+        const count = Array.isArray(control.components) ? control.components.length : 0;
+        return sum + count;
+      }, 0);
+    }
+    return profile.channels?.length || 1;
+  };
+
+  const getProfileChannelName = (profile, channelOffset) => {
+    if (!profile) return '';
+    if (profile.controls && Array.isArray(profile.controls)) {
+      for (const control of profile.controls) {
+        if (!Array.isArray(control.components)) continue;
+        const comp = control.components.find(component => component.offset === channelOffset);
+        if (comp) return comp.name || '';
+      }
+      return '';
+    }
+    return profile.channels?.[channelOffset]?.name || '';
   };
 
   // === CONTROL BLOCK FUNCTIONS ===
@@ -696,6 +734,26 @@ const SettingsPage = () => {
       channelCount: 1,
       components: [
         { type: 'zoom', name: 'zoom', offset: 0 }
+      ],
+      defaultValue: { type: 'scalar', v: 127 / 255 }
+    },
+    'CCT': {
+      label: 'CCT (1ch)',
+      domain: 'Color',
+      controlType: 'CCT',
+      channelCount: 1,
+      components: [
+        { type: 'cct', name: 'cct', offset: 0 }
+      ],
+      defaultValue: { type: 'scalar', v: 63 / 255 }
+    },
+    'Tint': {
+      label: 'Tint (1ch)',
+      domain: 'Color',
+      controlType: 'Tint',
+      channelCount: 1,
+      components: [
+        { type: 'tint', name: 'tint', offset: 0 }
       ],
       defaultValue: { type: 'scalar', v: 127 / 255 }
     }
@@ -846,13 +904,11 @@ const SettingsPage = () => {
           name: 'Looks',
           type: 'static',
           staticType: 'looks',
-          visible: true,
           showClearButton: true,
           order: 0,
           items: newConfig.looks.map((look, index) => ({
             type: 'look',
             id: look.id,
-            visible: true,
             order: index
           }))
         },
@@ -861,13 +917,11 @@ const SettingsPage = () => {
           name: 'Fixtures',
           type: 'static',
           staticType: 'fixtures',
-          visible: true,
           showClearButton: true,
           order: 1,
           items: newConfig.fixtures.map((fixture, index) => ({
             type: 'fixture',
             id: fixture.id,
-            visible: true,
             order: index
           }))
         }
@@ -991,14 +1045,6 @@ const SettingsPage = () => {
     }
   };
 
-  const toggleAllLayoutItems = (layoutIndex, itemType, visible) => {
-    const newConfig = { ...config };
-    newConfig.showLayouts[layoutIndex].items
-      .filter(item => item.type === itemType)
-      .forEach(item => item.visible = visible);
-    setConfig(newConfig);
-  };
-
   const handleLayoutItemDragStart = (e, layoutIndex, itemIndex) => {
     setDraggedItem({ type: 'layoutItem', layoutIndex, itemIndex });
     e.dataTransfer.effectAllowed = 'move';
@@ -1041,7 +1087,6 @@ const SettingsPage = () => {
       id: `section-${Date.now()}`,
       name: 'New Section',
       type: 'custom',
-      visible: true,
       showClearButton: false,
       order: layout.sections.length,
       items: []
@@ -1078,7 +1123,6 @@ const SettingsPage = () => {
     section.items.push({
       type: type,
       id: id,
-      visible: true,
       order: section.items.length
     });
     setConfig(newConfig);
@@ -2698,7 +2742,7 @@ const SettingsPage = () => {
                           )}
 
                           {/* Intensity/Generic: Number input (0-255) */}
-                          {(control.controlType === 'Intensity' || control.controlType === 'Generic' || control.controlType === 'Zoom') && (
+                          {(control.controlType === 'Intensity' || control.controlType === 'Generic' || control.controlType === 'Zoom' || control.controlType === 'CCT' || control.controlType === 'Tint') && (
                             <>
                               <input
                                 type="number"
@@ -2754,6 +2798,8 @@ const SettingsPage = () => {
                       <option value="RGBW">RGBW (4ch)</option>
                       <option value="Generic">Generic (1ch)</option>
                       <option value="Zoom">Zoom (1ch)</option>
+                      <option value="CCT">CCT (1ch)</option>
+                      <option value="Tint">Tint (1ch)</option>
                     </select>
                   </div>
                 </div>
@@ -2903,12 +2949,6 @@ const SettingsPage = () => {
               })()}
 
               <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
-                <button
-                  className="btn btn-secondary btn-small"
-                  onClick={() => addProfileChannel(profileIndex)}
-                >
-                  + Add Channel
-                </button>
                 <select
                   className="btn btn-secondary btn-small"
                   style={{ cursor: 'pointer' }}
@@ -2924,7 +2964,15 @@ const SettingsPage = () => {
                   <option value="RGB">RGB (3 ch)</option>
                   <option value="RGBW">RGBW (4 ch)</option>
                   <option value="Intensity">Intensity (1 ch)</option>
+                  <option value="CCT">CCT (1 ch)</option>
+                  <option value="Tint">Tint (1 ch)</option>
                 </select>
+                <button
+                  className="btn btn-secondary btn-small"
+                  onClick={() => addProfileChannel(profileIndex)}
+                >
+                  + Add Custom
+                </button>
               </div>
               </>
               )}
@@ -3312,7 +3360,7 @@ const SettingsPage = () => {
                       .filter(f => f.universe === patchViewerUniverse)
                       .filter(f => {
                         const profile = config.fixtureProfiles?.find(p => p.id === f.profileId);
-                        const channelCount = profile?.channels?.length || 1;
+                        const channelCount = getProfileChannelCount(profile);
                         return channel >= f.startAddress && channel < f.startAddress + channelCount;
                       });
                     
@@ -3320,12 +3368,12 @@ const SettingsPage = () => {
                     const fixture = fixturesAtChannel[0];
                     const profile = fixture ? config.fixtureProfiles?.find(p => p.id === fixture.profileId) : null;
                     const channelOffset = fixture ? channel - fixture.startAddress : 0;
-                    const channelName = profile?.channels?.[channelOffset]?.name || '';
+                    const channelName = getProfileChannelName(profile, channelOffset);
                     
                     // Get DMX value for this channel
                     const universeData = dmxData[patchViewerUniverse] || [];
                     const dmxValue = universeData[channel - 1] || 0;
-                    const channelCount = profile?.channels?.length || 1;
+                    const channelCount = getProfileChannelCount(profile);
                     
                     // Determine border for fixture grouping
                     const isFirstChannel = fixture && channel === fixture.startAddress;
@@ -3421,7 +3469,7 @@ const SettingsPage = () => {
                     .filter(f => f.universe === patchViewerUniverse)
                     .map(fixture => {
                       const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
-                      const channelCount = profile?.channels?.length || 1;
+                      const channelCount = getProfileChannelCount(profile);
                       const hash = fixture.id.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
                       const hue = hash % 360;
                       return (
@@ -3665,8 +3713,22 @@ const SettingsPage = () => {
                   const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
                   if (!profile) return null;
 
-                  const targets = look.targets[fixture.id] || {};
+                  const targets = look.targets?.[fixture.id] || {};
                   const colorMode = fixture.colorMode || 'rgb';
+                  const targetChannels = [];
+                  if (profile.controls && Array.isArray(profile.controls)) {
+                    profile.controls.forEach(control => {
+                      if (control.components && Array.isArray(control.components)) {
+                        control.components.forEach(comp => {
+                          targetChannels.push({ name: comp.name, label: comp.name });
+                        });
+                      }
+                    });
+                  } else if (profile.channels) {
+                    profile.channels.forEach(channel => {
+                      targetChannels.push({ name: channel.name, label: channel.name });
+                    });
+                  }
 
                   return (
                     <div key={fixture.id} className="fixture-targets" style={{ marginBottom: '16px', padding: '12px', background: '#1a1a2e', borderRadius: '8px' }}>
@@ -3725,10 +3787,10 @@ const SettingsPage = () => {
                         </>
                       ) : (
                         // RGB mode: Show channel sliders
-                        profile.channels.map(channel => (
+                        targetChannels.map(channel => (
                           <div key={channel.name} className="slider-group" style={{ marginBottom: '8px' }}>
                             <label style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-                              <span>{channel.name.charAt(0).toUpperCase() + channel.name.slice(1)}</span>
+                              <span>{channel.label.charAt(0).toUpperCase() + channel.label.slice(1)}</span>
                               <span>{targets[channel.name] || 0}%</span>
                             </label>
                             <input
@@ -3816,7 +3878,7 @@ const SettingsPage = () => {
                   </div>
                   {isCollapsed && (
                     <div style={{ paddingLeft: '32px', color: '#666', fontSize: '13px' }}>
-                      {(layout.sections || []).filter(s => s.visible !== false).length} visible sections
+                      {(layout.sections || []).length} sections
                     </div>
                   )}
                 </div>
@@ -4225,17 +4287,6 @@ const SettingsPage = () => {
                                   fontWeight: '500'
                                 }}
                               />
-                              <div className="form-group checkbox-group" style={{ marginBottom: 0 }}>
-                                <input
-                                  type="checkbox"
-                                  id={`section-visible-${section.id}`}
-                                  checked={section.visible !== false}
-                                  onChange={(e) => updateSection(layoutIndex, sectionIndex, 'visible', e.target.checked)}
-                                />
-                                <label htmlFor={`section-visible-${section.id}`} style={{ fontSize: '12px' }}>
-                                  Visible
-                                </label>
-                              </div>
                               {!isStatic && (
                                 <button
                                   className="btn btn-danger btn-small"
@@ -4331,22 +4382,6 @@ const SettingsPage = () => {
                               </select>
                             </div>
 
-                            {/* Visible All / Deselect All toggle */}
-                            <div style={{ marginBottom: '8px', display: 'flex', gap: '8px' }}>
-                              <button
-                                className="btn btn-secondary btn-small"
-                                onClick={() => {
-                                  const allVisible = section.items.every(item => item.visible);
-                                  section.items.forEach(item => {
-                                    updateSectionItem(layoutIndex, sectionIndex, item.id, 'visible', !allVisible);
-                                  });
-                                }}
-                                style={{ fontSize: '11px', padding: '4px 8px' }}
-                              >
-                                {section.items.every(item => item.visible) ? 'Deselect All' : 'Visible All'}
-                              </button>
-                            </div>
-
                             {/* Items in Section */}
                             <div style={{ background: '#1a1a2e', padding: '8px', borderRadius: '4px' }}>
                               {section.items.length === 0 && (
@@ -4381,9 +4416,9 @@ const SettingsPage = () => {
                                         gap: '6px',
                                         padding: '6px 8px',
                                         marginBottom: '4px',
-                                        background: item.visible ? '#2a3a2a' : '#3a2a2a',
+                                        background: '#2a3a2a',
                                         borderRadius: '4px',
-                                        border: item.visible ? '1px solid #4a6a4a' : '1px solid #6a4a4a',
+                                        border: '1px solid #4a6a4a',
                                         cursor: 'grab'
                                       }}
                                     >
@@ -4399,20 +4434,28 @@ const SettingsPage = () => {
                                       }}>
                                         {itemType}
                                       </span>
-                                      <span style={{ flex: 1, color: item.visible ? '#e0e0e0' : '#888', fontSize: '12px' }}>
+                                      <span style={{ flex: 1, color: '#e0e0e0', fontSize: '12px' }}>
                                         {itemName}
                                       </span>
-                                      <div className="form-group checkbox-group" style={{ marginBottom: 0 }}>
-                                        <input
-                                          type="checkbox"
-                                          id={`item-visible-${section.id}-${item.id}`}
-                                          checked={item.visible === true}
-                                          onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'visible', e.target.checked)}
-                                        />
-                                        <label htmlFor={`item-visible-${section.id}-${item.id}`} style={{ fontSize: '11px' }}>
-                                          Visible
-                                        </label>
-                                      </div>
+                                      {item.type === 'fixture' && (
+                                        <select
+                                          value={item.controlMode || 'toggle'}
+                                          onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'controlMode', e.target.value)}
+                                          style={{
+                                            padding: '4px 6px',
+                                            fontSize: '11px',
+                                            background: '#2a2a2a',
+                                            color: '#f0f0f0',
+                                            border: '1px solid #444',
+                                            borderRadius: '4px',
+                                            marginLeft: '8px'
+                                          }}
+                                          title="Fixture Control"
+                                        >
+                                          <option value="toggle">Toggle</option>
+                                          <option value="slider">Slider</option>
+                                        </select>
+                                      )}
 
                                       {/* Display Mode dropdown for RGB fixtures */}
                                       {item.type === 'fixture' && (() => {

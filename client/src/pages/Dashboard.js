@@ -2,7 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom';
 import { useWebSocketContext } from '../contexts/WebSocketContext';
 import Slider from '../components/Slider';
+import ColorWheel from '../components/ColorWheel';
 import ConnectedUsers from '../components/ConnectedUsers';
+import { rgbToHsv, hsvToRgb } from '../utils/color';
 
 // HTP Metadata Hook - computes which looks control which channels
 const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) => {
@@ -15,12 +17,51 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
     // Filter out any undefined/null fixtures before processing
     const fixtures = (config.fixtures || []).filter(f => f);
 
+    const getDefaultValueForComponent = (control, component) => {
+      const defaultVal = control.defaultValue;
+      if (!defaultVal) {
+        if (component.type === 'intensity') return 0;
+        if (component.type === 'red' || component.type === 'green' || component.type === 'blue') return 100;
+        if (component.type === 'white' || component.type === 'amber') return 100;
+        return 0;
+      }
+
+      if (defaultVal.type === 'rgb') {
+        if (component.type === 'red') return (defaultVal.r || 0) * 100;
+        if (component.type === 'green') return (defaultVal.g || 0) * 100;
+        if (component.type === 'blue') return (defaultVal.b || 0) * 100;
+      } else if (defaultVal.type === 'rgbw') {
+        if (component.type === 'red') return (defaultVal.r || 0) * 100;
+        if (component.type === 'green') return (defaultVal.g || 0) * 100;
+        if (component.type === 'blue') return (defaultVal.b || 0) * 100;
+        if (component.type === 'white') return (defaultVal.w || 0) * 100;
+      } else if (defaultVal.type === 'scalar') {
+        return (defaultVal.v || 0) * 100;
+      } else if (defaultVal.type === 'xy') {
+        if (component.type === 'pan') return (defaultVal.x || 0.5) * 100;
+        if (component.type === 'tilt') return (defaultVal.y || 0.5) * 100;
+      }
+
+      return 0;
+    };
+
     fixtures.forEach(fixture => {
       const fixtureId = fixture?.id;
       if (!fixtureId) return;
 
       const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
       if (!profile) return;
+
+      const defaultValues = {};
+      if (profile.controls && Array.isArray(profile.controls)) {
+        profile.controls.forEach(control => {
+          if (control.components && Array.isArray(control.components)) {
+            control.components.forEach(comp => {
+              defaultValues[comp.name] = getDefaultValueForComponent(control, comp);
+            });
+          }
+        });
+      }
 
       // Get channel names from Control Blocks
       let channelsToProcess = [];
@@ -81,31 +122,26 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
           });
         }
 
-        // Source 2+: Each active look
+        // Source 2+: Each look (blend from default to snapshot)
         config.looks?.forEach(look => {
-          const lookLevel = state.looks?.[look.id] || 0;
-          if (lookLevel > 0 && look.targets?.[fixtureId]) {
+          const lookLevel = state.looks?.[look.id] ?? 0;
+          if (look.targets?.[fixtureId]) {
             const target = look.targets[fixtureId];
             const targetValue = target[channelName];
-            if (targetValue !== undefined && targetValue > 0) {
-              // For HSV channels: hue and sat are absolute, only brightness scales with look level
-              let effectiveValue;
-              if (channelName === 'hue' || channelName === 'sat') {
-                // Hue and saturation don't scale with look level
-                effectiveValue = targetValue;
-              } else if (channelName === 'brightness') {
-                // Brightness scales with look level (lookLevel is 0-1, targetValue is 0-100)
-                effectiveValue = targetValue * lookLevel;
-              } else {
-                // RGB channels: scale with look level (0-1)
-                effectiveValue = targetValue * lookLevel;
+            if (targetValue !== undefined) {
+              const defaultValue = defaultValues[channelName] ?? 0;
+              const diff = Math.abs(targetValue - defaultValue);
+              if (lookLevel > 0 && diff > 0.01) {
+                const effectiveValue = defaultValue + (targetValue - defaultValue) * lookLevel;
+                sources.push({
+                  type: 'look',
+                  value: effectiveValue,
+                  lookId: look.id,
+                  color: look.color || 'blue',
+                  lookLevel,
+                  targetValue
+                });
               }
-              sources.push({
-                type: 'look',
-                value: effectiveValue,
-                lookId: look.id,
-                color: look.color || 'blue'
-              });
             }
           }
         });
@@ -115,15 +151,16 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
         const isFrozen = frozenValue !== undefined;
 
         if (isFrozen) {
-          const lookSources = sources.filter(s => s.type === 'look');
+          const lookSources = sources.filter(s => s.type === 'look' && s.lookLevel > 0);
           
           // Check if any look controlling this channel is at 100%
           let hasLookAt100 = false;
           config.looks?.forEach(look => {
-            const lookLevel = state.looks?.[look.id] || 0;
+            const lookLevel = state.looks?.[look.id] ?? 0;
             if (lookLevel >= 1 && look.targets?.[fixtureId]) {
               const targetValue = look.targets[fixtureId][channelName];
-              if (targetValue !== undefined && targetValue > 0) {
+              const defaultValue = defaultValues[channelName] ?? 0;
+              if (targetValue !== undefined && Math.abs(targetValue - defaultValue) > 0.01) {
                 hasLookAt100 = true;
               }
             }
@@ -152,12 +189,12 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
           metadata[key] = { winners: [], contributors: [], frozen: false, displayValue: fixtureState?.[channelName] || 0, lookIntensity: 0 };
         } else {
           const maxValue = Math.max(...sources.map(s => s.value));
-          const winners = sources.filter(s => s.value === maxValue && s.type === 'look');
-          const contributors = sources.filter(s => s.type === 'look' && s.value > 0);
+          const winners = sources.filter(s => s.value === maxValue && s.type === 'look' && s.lookLevel > 0);
+          const contributors = sources.filter(s => s.type === 'look' && s.lookLevel > 0 && s.targetValue !== undefined);
 
           // Find highest look intensity for opacity
           const lookIntensities = sources
-            .filter(s => s.type === 'look')
+            .filter(s => s.type === 'look' && s.lookLevel > 0)
             .map(s => state.looks?.[s.lookId] || 0);
           const maxLookIntensity = lookIntensities.length > 0 ? Math.max(...lookIntensities) : 0;
 
@@ -179,7 +216,7 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
 const Dashboard = () => {
   const navigate = useNavigate();
   const { urlSlug } = useParams();
-  const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients, getDashboardRole, isEditorAnywhere } = useWebSocketContext();
+  const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients, getDashboardRole, isEditorAnywhere, hsvCache, setFixtureHsv, resetFixtureHsv } = useWebSocketContext();
   const [config, setConfig] = useState(null);
   const [activeLayout, setActiveLayout] = useState(null);
   const [recordingLook, setRecordingLook] = useState(null);
@@ -188,6 +225,48 @@ const Dashboard = () => {
   const [frozenChannels, setFrozenChannels] = useState({});  // Tracks frozen values after recording {key: frozenValue}
   const [accessDenied, setAccessDenied] = useState(false);
   const [dashboardRole, setDashboardRole] = useState('viewer');
+  const lastRgbByFixtureRef = useRef({});
+  const lastHsvByFixtureRef = useRef({});
+  const pendingClearRef = useRef(new Set());
+  const resetFixtureColorCache = useCallback((fixtureIds) => {
+    fixtureIds.forEach(fixtureId => {
+      lastRgbByFixtureRef.current[fixtureId] = { r: 0, g: 0, b: 0 };
+      lastHsvByFixtureRef.current[fixtureId] = { h: 0, s: 0, v: 0 };
+      pendingClearRef.current.add(fixtureId);
+    });
+    resetFixtureHsv(fixtureIds);
+  }, [resetFixtureHsv]);
+
+  const applyDashboardClearDefaults = useCallback((profile, fixtureId, updates) => {
+    if (!profile?.controls) return;
+
+    const rgbControl = profile.controls.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
+    if (!rgbControl || !Array.isArray(rgbControl.components)) return;
+
+    const intensityControl = profile.controls.find(c => c.controlType === 'Intensity');
+    const hasIntensity = intensityControl && Array.isArray(intensityControl.components);
+
+    const rgbComponents = rgbControl.components.filter(c => c.type === 'red' || c.type === 'green' || c.type === 'blue');
+    if (rgbComponents.length === 0) return;
+
+    if (hasIntensity) {
+      const dv = rgbControl.defaultValue;
+      const defaultRgb = (dv?.type === 'rgb' || dv?.type === 'rgbw')
+        ? { r: dv.r ?? 1, g: dv.g ?? 1, b: dv.b ?? 1 }
+        : { r: 1, g: 1, b: 1 };
+      rgbComponents.forEach(comp => {
+        if (comp.type === 'red') updates[comp.name] = defaultRgb.r * 100;
+        if (comp.type === 'green') updates[comp.name] = defaultRgb.g * 100;
+        if (comp.type === 'blue') updates[comp.name] = defaultRgb.b * 100;
+      });
+    } else {
+      rgbComponents.forEach(comp => {
+        updates[comp.name] = 0;
+      });
+    }
+
+    resetFixtureColorCache([fixtureId]);
+  }, [resetFixtureColorCache]);
 
   // Compute HTP metadata
   const { metadata: htpMetadata, channelsToRelease } = useHTPMetadata(state, config, channelOverrides, frozenChannels);
@@ -270,8 +349,8 @@ const Dashboard = () => {
 
         // If dashboard requires explicit access, check if user has dashboard-specific role
         if (accessControl.requireExplicitAccess && getDashboardRole) {
-          const hasExplicitAccess = getDashboardRole(layout.id) !== role; // Has dashboard-specific role
-          if (!hasExplicitAccess && dashboardRole === 'viewer') {
+          const hasExplicitAccess = getDashboardRole(layout.id) != null;
+          if (!hasExplicitAccess) {
             console.warn(`Access denied: Dashboard '${layout.name}' requires explicit access`);
             alert(`You don't have access to this dashboard. Please request access from an administrator.`);
             setAccessDenied(true);
@@ -332,6 +411,9 @@ const Dashboard = () => {
         }
       }
     });
+    if (pendingClearRef.current.has(fixtureId)) {
+      pendingClearRef.current.delete(fixtureId);
+    }
 
     const key = `${fixtureId}.${property}`;
     const meta = htpMetadataRef.current[key];
@@ -371,6 +453,7 @@ const Dashboard = () => {
     return rgbHandlersRef.current.get(key);
   }, [handleFixtureChange]);
 
+
   const handleRecordLook = (lookId) => {
     setRecordingLook(lookId);
 
@@ -401,16 +484,9 @@ const Dashboard = () => {
         const meta = htpMetadata[key];
         const displayValue = meta?.displayValue || 0;
 
-        // Record all non-zero values
-        if (displayValue > 0) {
-          capturedTargets[fixture.id][channel.name] = Math.round(displayValue * 100) / 100;
-        }
+        // Record all values (including zero)
+        capturedTargets[fixture.id][channel.name] = Math.round(displayValue * 100) / 100;
       });
-
-      // Remove empty fixture entries
-      if (Object.keys(capturedTargets[fixture.id]).length === 0) {
-        delete capturedTargets[fixture.id];
-      }
     });
     
     // Send captured values to server
@@ -565,11 +641,13 @@ const Dashboard = () => {
               applyControlDefaults(control, clearedFixtures[fixture.id]);
             }
           });
+          applyDashboardClearDefaults(profile, fixture.id, clearedFixtures[fixture.id]);
         } else if (profile.channels) {
           // Legacy fallback - set all to 0
           profile.channels.forEach(ch => {
             clearedFixtures[fixture.id][ch.name] = 0;
           });
+          resetFixtureColorCache([fixture.id]);
         }
       }
     });
@@ -650,7 +728,6 @@ const Dashboard = () => {
 
   // Get visible sections from active layout
   const visibleSections = (activeLayout.sections || [])
-    .filter(section => section.visible !== false)
     .sort((a, b) => a.order - b.order);
 
   return (
@@ -719,7 +796,6 @@ const Dashboard = () => {
       {visibleSections.map(section => {
         // Get visible items from this section
         const visibleItems = section.items
-          .filter(item => item.visible !== false)
           .sort((a, b) => a.order - b.order);
 
         if (visibleItems.length === 0) return null;
@@ -780,12 +856,14 @@ const Dashboard = () => {
                                       applyControlDefaults(control, fixturesToClear[fixture.id]);
                                     }
                                   });
+                                  applyDashboardClearDefaults(profile, fixture.id, fixturesToClear[fixture.id]);
                                 } else if (profile.channels) {
                                   // Legacy fallback
                                   profile.channels.forEach(ch => {
                                     delete newOverrides[`${fixture.id}.${ch.name}`];
                                     fixturesToClear[fixture.id][ch.name] = 0;
                                   });
+                                  resetFixtureColorCache([fixture.id]);
                                 }
                               }
                             }
@@ -794,6 +872,7 @@ const Dashboard = () => {
                           setChannelOverrides(newOverrides);
                           if (Object.keys(fixturesToClear).length > 0) {
                             sendUpdate({ fixtures: fixturesToClear });
+                            resetFixtureColorCache(Object.keys(fixturesToClear));
                           }
                         } else {
                           handleClearAllFixtures();
@@ -858,13 +937,19 @@ const Dashboard = () => {
 
                 // Get color preview for RGB fixtures (using HTP-computed values)
                 let colorPreview = null;
+                let rgbControl = null;
+                let rgbComponents = null;
+                let redComp = null;
+                let greenComp = null;
+                let blueComp = null;
                 if (profile.controls && Array.isArray(profile.controls)) {
                   // Find RGB control block
-                  const rgbControl = profile.controls.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
+                  rgbControl = profile.controls.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
                   if (rgbControl) {
-                    const redComp = rgbControl.components.find(c => c.type === 'red');
-                    const greenComp = rgbControl.components.find(c => c.type === 'green');
-                    const blueComp = rgbControl.components.find(c => c.type === 'blue');
+                    rgbComponents = rgbControl.components || [];
+                    redComp = rgbComponents.find(c => c.type === 'red');
+                    greenComp = rgbComponents.find(c => c.type === 'green');
+                    blueComp = rgbComponents.find(c => c.type === 'blue');
 
                     if (redComp && greenComp && blueComp) {
                       // Use HTP metadata for actual displayed color
@@ -884,28 +969,83 @@ const Dashboard = () => {
                 let toggleComponents = [];
                 let brightnessValue = 0;
                 let lookContributors = []; // Track which looks are contributing
+                let intensityChannelName = null;
+                let intensityDisplayValue = 0;
+                let rgbChannelNames = [];
+                let directRgb = null;
+                let rgbChannelMap = null;
+                let rgbHsv = null;
+                let htpRgb = null;
 
                 if (profile.controls && Array.isArray(profile.controls)) {
                   // Check for dedicated Intensity control first
                   const intensityControl = profile.controls.find(c => c.controlType === 'Intensity');
                   if (intensityControl && intensityControl.components && intensityControl.components.length > 0) {
                     toggleComponents = intensityControl.components;
-                    const channelName = intensityControl.components[0].name;
-                    const meta = htpMetadata[`${fixture.id}.${channelName}`];
+                    intensityChannelName = intensityControl.components[0].name;
+                    const meta = htpMetadata[`${fixture.id}.${intensityChannelName}`];
                     brightnessValue = meta?.displayValue || 0;
+                    intensityDisplayValue = meta?.displayValue || 0;
                     lookContributors = meta?.contributors || [];
                   } else {
                     // No intensity control - check for RGB/RGBW and use those for brightness toggle
-                    const rgbControl = profile.controls.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
-                    if (rgbControl && rgbControl.components) {
+                    if (rgbControl && rgbComponents) {
+                      if (!redComp || !greenComp || !blueComp) {
+                        return null;
+                      }
+
+                      rgbChannelMap = {
+                        red: redComp.name,
+                        green: greenComp.name,
+                        blue: blueComp.name
+                      };
                       toggleComponents = rgbControl.components;
                       // Calculate brightness as max of RGB HTP values
-                      const rgbChannels = rgbControl.components
-                        .filter(c => c.type === 'red' || c.type === 'green' || c.type === 'blue')
-                        .map(c => c.name);
+                      rgbChannelNames = [rgbChannelMap.red, rgbChannelMap.green, rgbChannelMap.blue];
 
-                      const rgbMetas = rgbChannels.map(ch => htpMetadata[`${fixture.id}.${ch}`] || { displayValue: 0, contributors: [] });
-                      brightnessValue = Math.max(...rgbMetas.map(m => m.displayValue), 0);
+                      const redMeta = htpMetadata[`${fixture.id}.${rgbChannelMap.red}`] || { displayValue: 0, contributors: [] };
+                      const greenMeta = htpMetadata[`${fixture.id}.${rgbChannelMap.green}`] || { displayValue: 0, contributors: [] };
+                      const blueMeta = htpMetadata[`${fixture.id}.${rgbChannelMap.blue}`] || { displayValue: 0, contributors: [] };
+                      const rgbMetas = [redMeta, greenMeta, blueMeta];
+
+                      const fixtureState = state.fixtures?.[fixture.id] || {};
+                      directRgb = {
+                        r: fixtureState[rgbChannelMap.red] ?? 0,
+                        g: fixtureState[rgbChannelMap.green] ?? 0,
+                        b: fixtureState[rgbChannelMap.blue] ?? 0
+                      };
+                      const directMax = Math.max(directRgb.r, directRgb.g, directRgb.b, 0);
+
+                      htpRgb = {
+                        r: redMeta.displayValue || 0,
+                        g: greenMeta.displayValue || 0,
+                        b: blueMeta.displayValue || 0
+                      };
+                      const displayBrightness = Math.max(htpRgb.r, htpRgb.g, htpRgb.b);
+                      brightnessValue = displayBrightness;
+                      if (pendingClearRef.current.has(fixture.id)) {
+                        brightnessValue = 0;
+                      }
+                      intensityDisplayValue = brightnessValue;
+
+                      if (pendingClearRef.current.has(fixture.id)) {
+                        if (directMax === 0) {
+                          pendingClearRef.current.delete(fixture.id);
+                        }
+                      } else if (directMax > 0) {
+                        lastRgbByFixtureRef.current[fixture.id] = directRgb;
+                        lastHsvByFixtureRef.current[fixture.id] = rgbToHsv(directRgb.r, directRgb.g, directRgb.b);
+                      }
+
+                      const cachedHsv = hsvCache?.[fixture.id];
+                      const htpHsv = rgbToHsv(htpRgb.r, htpRgb.g, htpRgb.b);
+                      const useHtpHsv = lookContributors.length > 0 && displayBrightness > 0;
+                      const seedHsv = useHtpHsv ? htpHsv : rgbToHsv(directRgb.r, directRgb.g, directRgb.b);
+                      const displayHsv = useHtpHsv ? htpHsv : (cachedHsv || seedHsv);
+                      rgbHsv = { ...displayHsv, v: brightnessValue };
+                      if (!cachedHsv || useHtpHsv) {
+                        setFixtureHsv(fixture.id, { ...displayHsv, v: brightnessValue });
+                      }
 
                       // Combine contributors from all RGB channels
                       const allContributors = rgbMetas.flatMap(m => m.contributors || []);
@@ -962,15 +1102,29 @@ const Dashboard = () => {
                   boxShadow = `0 0 ${12 * intensity}px ${glowColor}`;
                 }
 
+                const sliderAvailable = (item.controlMode === 'slider') && (Boolean(intensityChannelName) || Boolean(rgbControl));
+                const showToggle = !sliderAvailable;
+                const isPendingClear = pendingClearRef.current.has(fixture.id);
+                const rgbValues = directRgb;
+
+                const handleFixtureCardClick = (e) => {
+                  const target = e.target;
+                  if (target && target.closest) {
+                    if (target.closest('input[type="range"]')) return;
+                    if (target.closest('.fixture-card-action')) return;
+                  }
+                  navigate(`/fixture/${fixture.id}`);
+                };
+
                 return (
                   <div
                     key={item.id}
                     className="fixture-list-item"
-                    onClick={() => navigate(`/fixture/${fixture.id}`)}
+                    onClick={handleFixtureCardClick}
                     style={{
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
+                      flexDirection: 'column',
+                      alignItems: 'stretch',
                       padding: '16px',
                       background: '#2a2a2a',
                       borderRadius: '12px',
@@ -978,70 +1132,129 @@ const Dashboard = () => {
                       cursor: 'pointer',
                       transition: 'all 0.2s',
                       border: `2px solid ${borderColor}`,
-                      boxShadow: boxShadow
+                      boxShadow: boxShadow,
+                      userSelect: 'none'
                     }}
                     onMouseEnter={(e) => e.currentTarget.style.background = '#333333'}
                     onMouseLeave={(e) => e.currentTarget.style.background = '#2a2a2a'}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
-                      {/* Fixture name */}
-                      <span style={{ fontSize: '16px', fontWeight: '500', color: '#fff' }}>
-                        {fixture.name || fixture.id}
-                      </span>
-                      {/* Look indicator dots - grey when fixture is overridden */}
-                      {lookContributors.length > 0 && (
-                        <div style={{ display: 'flex', gap: '4px' }}>
-                          {lookContributors.slice(0, 3).map((contributor, idx) => (
-                            <div
-                              key={idx}
-                              style={{
-                                width: '8px',
-                                height: '8px',
-                                borderRadius: '50%',
-                                background: isFixtureOverridden ? '#666' : (colorMap[contributor.color] || '#4a90e2'),
-                                opacity: isFixtureOverridden ? 0.7 : (0.5 + ((contributor.value || 0) / 100) * 0.5),
-                                flexShrink: 0
-                              }}
-                            />
-                          ))}
-                        </div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+                        {/* Fixture name */}
+                        <span style={{ fontSize: '16px', fontWeight: '500', color: '#fff' }}>
+                          {fixture.name || fixture.id}
+                        </span>
+                        {/* Look indicator dots - grey when fixture is overridden */}
+                        {lookContributors.length > 0 && (
+                          <div style={{ display: 'flex', gap: '4px' }}>
+                            {lookContributors.slice(0, 3).map((contributor, idx) => (
+                              <div
+                                key={idx}
+                                style={{
+                                  width: '8px',
+                                  height: '8px',
+                                  borderRadius: '50%',
+                                  background: isFixtureOverridden ? '#666' : (colorMap[contributor.color] || '#4a90e2'),
+                                  opacity: isFixtureOverridden ? 0.7 : (0.5 + ((contributor.value || 0) / 100) * 0.5),
+                                  flexShrink: 0
+                                }}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Toggle button - RGB color for color fixtures, grey for dimmer-only */}
+                      {showToggle && toggleComponents.length > 0 && (
+                        <button
+                          onClick={handleToggle}
+                          disabled={dashboardRole === 'viewer'}
+                          className="fixture-card-action"
+                          style={{
+                            width: '56px',
+                            height: '32px',
+                            borderRadius: '16px',
+                            background: brightnessValue > 0 
+                              ? (colorPreview || `rgb(${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)})`)
+                              : '#333',
+                            border: 'none',
+                            cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
+                            position: 'relative',
+                            transition: 'background 0.2s',
+                            opacity: dashboardRole === 'viewer' ? 0.5 : 1,
+                            flexShrink: 0
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '24px',
+                              height: '24px',
+                              borderRadius: '50%',
+                              background: '#fff',
+                              position: 'absolute',
+                              top: '4px',
+                              left: brightnessValue > 0 ? '28px' : '4px',
+                              transition: 'left 0.2s',
+                              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                            }}
+                          />
+                        </button>
                       )}
                     </div>
 
-                    {/* Toggle button - RGB color for color fixtures, grey for dimmer-only */}
-                    {toggleComponents.length > 0 && (
-                      <button
-                        onClick={handleToggle}
-                        disabled={dashboardRole === 'viewer'}
-                        style={{
-                          width: '56px',
-                          height: '32px',
-                          borderRadius: '16px',
-                          background: brightnessValue > 0 
-                            ? (colorPreview || `rgb(${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)})`)
-                            : '#333',
-                          border: 'none',
-                          cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
-                          position: 'relative',
-                          transition: 'background 0.2s',
-                          opacity: dashboardRole === 'viewer' ? 0.5 : 1,
-                          flexShrink: 0
-                        }}
+                    {sliderAvailable && (
+                      <div
+                        className="fixture-slider-area"
+                        style={{ marginTop: '10px' }}
                       >
-                        <div
-                          style={{
-                            width: '24px',
-                            height: '24px',
-                            borderRadius: '50%',
-                            background: '#fff',
-                            position: 'absolute',
-                            top: '4px',
-                            left: brightnessValue > 0 ? '28px' : '4px',
-                            transition: 'left 0.2s',
-                            boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                          }}
-                        />
-                      </button>
+                        {intensityChannelName && (
+                          <Slider
+                            label=""
+                            value={intensityDisplayValue}
+                            min={0}
+                            max={100}
+                            step={1}
+                            unit="%"
+                            onChange={(value) => {
+                              handleFixtureChange(fixture.id, intensityChannelName, value);
+                            }}
+                            color="intensity"
+                            disabled={dashboardRole === 'viewer'}
+                          />
+                        )}
+                        {!intensityChannelName && rgbControl && redComp && greenComp && blueComp && rgbHsv && (
+                          <ColorWheel
+                            mode="hsv"
+                            hue={rgbHsv.h}
+                            sat={rgbHsv.s}
+                            brightness={rgbHsv.v}
+                            lockHueSat={true}
+                            onChange={(h, s, v) => {
+                              const cached = hsvCache?.[fixture.id] || rgbHsv;
+                              const nextH = cached?.h ?? h;
+                              const nextS = cached?.s ?? s;
+                              setFixtureHsv(fixture.id, { h: nextH, s: nextS, v });
+                              const nextRgb = hsvToRgb(nextH, nextS, v);
+                              handleFixtureChange(fixture.id, redComp.name, nextRgb.r || 0);
+                              handleFixtureChange(fixture.id, greenComp.name, nextRgb.g || 0);
+                              handleFixtureChange(fixture.id, blueComp.name, nextRgb.b || 0);
+                            }}
+                            disabled={dashboardRole === 'viewer'}
+                            showWheel={false}
+                            sliderMaxWidth="100%"
+                            customTrackGradient={
+                              htpRgb
+                                ? `linear-gradient(to right, #111 0%, rgb(${Math.round(htpRgb.r * 2.55)}, ${Math.round(htpRgb.g * 2.55)}, ${Math.round(htpRgb.b * 2.55)}) 100%)`
+                                : undefined
+                            }
+                            customThumbColor={
+                              htpRgb
+                                ? `rgb(${Math.round(htpRgb.r * 2.55)}, ${Math.round(htpRgb.g * 2.55)}, ${Math.round(htpRgb.b * 2.55)})`
+                                : undefined
+                            }
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 );

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useWebSocketContext } from '../contexts/WebSocketContext';
+import { rgbToHsv } from '../utils/color';
 import ColorWheel from '../components/ColorWheel';
 import Slider from '../components/Slider';
 import './FixtureDetail.css';
@@ -8,7 +9,7 @@ import './FixtureDetail.css';
 function FixtureDetail() {
   const { fixtureId } = useParams();
   const navigate = useNavigate();
-  const { state, sendUpdate } = useWebSocketContext();
+  const { state, sendUpdate, setFixtureHsv, hsvCache } = useWebSocketContext();
   const [config, setConfig] = useState(null);
   const [activeTab, setActiveTab] = useState(null);
   const [manuallyAdjusted, setManuallyAdjusted] = useState({}); // Tracks channels manually touched
@@ -49,10 +50,11 @@ function FixtureDetail() {
   }, [state?.overriddenFixtures, fixtureId, profile]);
 
   // Compute HTP metadata for this fixture's channels
-  const computeHTPMetadata = () => {
+  const { metadata: htpMetadata, channelsToRelease } = useMemo(() => {
     const metadata = {}; // { channelName: { contributors: [], displayValue: number, isOverridden, isFrozen } }
+    const channelsToRelease = [];
 
-    if (!profile || !state || !config) return metadata;
+    if (!profile || !state || !config) return { metadata, channelsToRelease };
 
     // Get all channel names from profile
     const channelNames = [];
@@ -61,6 +63,45 @@ function FixtureDetail() {
         if (control.components && Array.isArray(control.components)) {
           control.components.forEach(comp => {
             channelNames.push(comp.name);
+          });
+        }
+      });
+    }
+
+    const getDefaultValueForComponent = (control, component) => {
+      const defaultVal = control.defaultValue;
+      if (!defaultVal) {
+        if (component.type === 'intensity') return 0;
+        if (component.type === 'red' || component.type === 'green' || component.type === 'blue') return 100;
+        if (component.type === 'white' || component.type === 'amber') return 100;
+        return 0;
+      }
+
+      if (defaultVal.type === 'rgb') {
+        if (component.type === 'red') return (defaultVal.r || 0) * 100;
+        if (component.type === 'green') return (defaultVal.g || 0) * 100;
+        if (component.type === 'blue') return (defaultVal.b || 0) * 100;
+      } else if (defaultVal.type === 'rgbw') {
+        if (component.type === 'red') return (defaultVal.r || 0) * 100;
+        if (component.type === 'green') return (defaultVal.g || 0) * 100;
+        if (component.type === 'blue') return (defaultVal.b || 0) * 100;
+        if (component.type === 'white') return (defaultVal.w || 0) * 100;
+      } else if (defaultVal.type === 'scalar') {
+        return (defaultVal.v || 0) * 100;
+      } else if (defaultVal.type === 'xy') {
+        if (component.type === 'pan') return (defaultVal.x || 0.5) * 100;
+        if (component.type === 'tilt') return (defaultVal.y || 0.5) * 100;
+      }
+
+      return 0;
+    };
+
+    const defaultValues = {};
+    if (profile?.controls) {
+      profile.controls.forEach(control => {
+        if (control.components && Array.isArray(control.components)) {
+          control.components.forEach(comp => {
+            defaultValues[comp.name] = getDefaultValueForComponent(control, comp);
           });
         }
       });
@@ -81,25 +122,31 @@ function FixtureDetail() {
         });
       }
 
-      // Source 2+: Each active look (always collect for contributor tracking)
+      // Source 2+: Each look (blend from default to snapshot)
       config.looks?.forEach(look => {
-        const lookLevel = state.looks?.[look.id] || 0;
-        if (lookLevel > 0 && look.targets?.[fixtureId]) {
+        const lookLevel = state.looks?.[look.id] ?? 0;
+        if (look.targets?.[fixtureId]) {
           const target = look.targets[fixtureId];
           const targetValue = target[channelName];
-          if (targetValue !== undefined && targetValue > 0) {
-            const effectiveValue = targetValue * lookLevel;
-            sources.push({
-              type: 'look',
-              value: effectiveValue,
-              lookId: look.id,
-              color: look.color || 'blue'
-            });
-            lookContributors.push({
-              lookId: look.id,
-              color: look.color || 'blue',
-              value: effectiveValue
-            });
+          if (targetValue !== undefined) {
+            const defaultValue = defaultValues[channelName] ?? 0;
+            const diff = Math.abs(targetValue - defaultValue);
+            if (lookLevel > 0 && diff > 0.01) {
+              const effectiveValue = defaultValue + (targetValue - defaultValue) * lookLevel;
+              sources.push({
+                type: 'look',
+                value: effectiveValue,
+                lookId: look.id,
+                color: look.color || 'blue',
+                lookLevel,
+                targetValue
+              });
+              lookContributors.push({
+                lookId: look.id,
+                color: look.color || 'blue',
+                value: effectiveValue
+              });
+            }
           }
         }
       });
@@ -135,15 +182,16 @@ function FixtureDetail() {
       const isFrozen = frozenValue !== undefined;
 
       if (isFrozen) {
-        const lookSources = sources.filter(s => s.type === 'look');
+        const lookSources = sources.filter(s => s.type === 'look' && s.lookLevel > 0);
 
         // Check if any look controlling this channel is at 100%
         let hasLookAt100 = false;
         config.looks?.forEach(look => {
-          const lookLevel = state.looks?.[look.id] || 0;
+          const lookLevel = state.looks?.[look.id] ?? 0;
           if (lookLevel >= 1 && look.targets?.[fixtureId]) {
             const targetValue = look.targets[fixtureId][channelName];
-            if (targetValue !== undefined && targetValue > 0) {
+            const defaultValue = defaultValues[channelName] ?? 0;
+            if (targetValue !== undefined && Math.abs(targetValue - defaultValue) > 0.01) {
               hasLookAt100 = true;
             }
           }
@@ -151,11 +199,7 @@ function FixtureDetail() {
 
         if (hasLookAt100) {
           // Release this channel - a look controlling it is at 100%
-          setFrozenChannels(prev => {
-            const updated = { ...prev };
-            delete updated[channelName];
-            return updated;
-          });
+          channelsToRelease.push(channelName);
           // Fall through to normal HTP computation below
         } else {
           // Stay frozen - show frozen value with grey outline
@@ -176,7 +220,7 @@ function FixtureDetail() {
 
       // Find highest look intensity for opacity
       const lookIntensities = sources
-        .filter(s => s.type === 'look')
+        .filter(s => s.type === 'look' && s.lookLevel > 0)
         .map(s => state.looks?.[s.lookId] || 0);
       const maxLookIntensity = lookIntensities.length > 0 ? Math.max(...lookIntensities) : 0;
 
@@ -190,10 +234,54 @@ function FixtureDetail() {
       };
     });
 
-    return metadata;
-  };
+    return { metadata, channelsToRelease };
+  }, [profile, state, config, channelOverrides, frozenChannels, overriddenLooks, manuallyAdjusted, fixtureId]);
 
-  const htpMetadata = computeHTPMetadata();
+  // Keep HSV cache in sync with current RGB display (looks/HTP) when not manually adjusted
+  useEffect(() => {
+    if (!profile || !fixtureId) return;
+    if (manuallyAdjusted && Object.keys(manuallyAdjusted).length > 0) return;
+
+    const rgbControl = profile.controls?.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
+    if (!rgbControl?.components) return;
+    const redComp = rgbControl.components.find(c => c.type === 'red');
+    const greenComp = rgbControl.components.find(c => c.type === 'green');
+    const blueComp = rgbControl.components.find(c => c.type === 'blue');
+    if (!redComp || !greenComp || !blueComp) return;
+
+    const redMeta = htpMetadata[redComp.name];
+    const greenMeta = htpMetadata[greenComp.name];
+    const blueMeta = htpMetadata[blueComp.name];
+    const r = redMeta?.displayValue ?? 0;
+    const g = greenMeta?.displayValue ?? 0;
+    const b = blueMeta?.displayValue ?? 0;
+
+    if (r > 0 || g > 0 || b > 0) {
+      setFixtureHsv(fixtureId, rgbToHsv(r, g, b));
+    }
+  }, [profile, fixtureId, htpMetadata, manuallyAdjusted, setFixtureHsv]);
+
+  // Release frozen channels when look values match
+  useEffect(() => {
+    if (!channelsToRelease || channelsToRelease.length === 0) return;
+
+    setFrozenChannels(prev => {
+      const updated = { ...prev };
+      channelsToRelease.forEach(channelName => {
+        delete updated[channelName];
+      });
+      return updated;
+    });
+
+    const fixtureUpdates = {};
+    channelsToRelease.forEach(channelName => {
+      fixtureUpdates[channelName] = 0;
+    });
+
+    if (Object.keys(fixtureUpdates).length > 0) {
+      sendUpdate({ fixtures: { [fixtureId]: fixtureUpdates } });
+    }
+  }, [channelsToRelease, fixtureId, sendUpdate]);
 
   // If fixture not found, redirect back to dashboard
   useEffect(() => {
@@ -288,6 +376,7 @@ function FixtureDetail() {
     setManuallyAdjusted({});
     setFrozenChannels({});
     setOverriddenLooks([]);
+    setFixtureHsv(fixtureId, { h: 0, s: 0, v: 100 });
   };
 
   // Color map for look indicators
@@ -366,7 +455,10 @@ function FixtureDetail() {
             green={greenMeta.displayValue}
             blue={blueMeta.displayValue}
             hasManualValue={hasOverrides || isActiveControl}
+            syncHueSatFromProps={!hasOverrides && !isActiveControl}
+            initialHsv={hsvCache?.[fixtureId]}
             onChange={(r, g, b) => {
+              setFixtureHsv(fixtureId, rgbToHsv(r, g, b));
               // Mark channels as manually adjusted
               setManuallyAdjusted(prev => ({
                 ...prev,
@@ -520,6 +612,95 @@ function FixtureDetail() {
             isOverridden={false} // No grey outline on controls
             isFrozen={false} // No frozen outline on controls
             lookIntensity={0} // No look intensity indicator
+          />
+        </div>
+      );
+    } else if (control.controlType === 'CCT' || control.controlType === 'Tint') {
+      // Single slider (0-255 display, stored as 0-100)
+      const comp = control.components[0];
+      const meta = htpMetadata[comp?.name] || { contributors: [], displayValue: 0, hasManualValue: false };
+      const displayValue = Math.round((meta.displayValue || 0) * 2.55);
+      const trackGradient = control.controlType === 'CCT'
+        ? 'linear-gradient(to right, #ffb36a 0%, #b9dfff 100%)'
+        : 'linear-gradient(to right, #ff7ab6 0%, #7dffb2 100%)';
+
+      return (
+        <div key={control.id} className="control-block">
+          <h3>{control.label}</h3>
+          <Slider
+            value={displayValue}
+            min={0}
+            max={255}
+            step={1}
+            unit=""
+            onChange={(val) => {
+              const scaledValue = Math.max(0, Math.min(255, val)) / 2.55;
+              // Mark channel as manually adjusted
+              setManuallyAdjusted(prev => ({
+                ...prev,
+                [comp.name]: true
+              }));
+
+              // If channel was frozen, release it when user manually moves it
+              setFrozenChannels(prev => {
+                if (prev[comp.name] !== undefined) {
+                  const updated = { ...prev };
+                  delete updated[comp.name];
+                  return updated;
+                }
+                return prev;
+              });
+
+              // Detect override: check if ANY look with level > 0 targets this fixture
+              const activeLooksForFixture = [];
+              config.looks?.forEach(look => {
+                const lookLevel = state.looks?.[look.id] || 0;
+                if (lookLevel > 0 && look.targets?.[fixtureId]) {
+                  activeLooksForFixture.push({ id: look.id, color: look.color || 'blue', level: lookLevel });
+                }
+              });
+
+              const hasActiveLooks = activeLooksForFixture.length > 0;
+
+              if (hasActiveLooks) {
+                setChannelOverrides(prev => ({ ...prev, [comp.name]: true }));
+
+                // Save the contributing looks for grey dot display
+                setOverriddenLooks(activeLooksForFixture);
+
+                // Don't zero out looks - just mark fixture as overridden
+                sendUpdate({
+                  fixtures: {
+                    [fixtureId]: {
+                      [comp.name]: scaledValue
+                    }
+                  },
+                  overriddenFixtures: {
+                    [fixtureId]: {
+                      active: true,
+                      looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
+                    }
+                  }
+                });
+              } else {
+                // No override - normal update
+                sendUpdate({
+                  fixtures: {
+                    [fixtureId]: {
+                      [comp.name]: scaledValue
+                    }
+                  }
+                });
+              }
+            }}
+            label=""
+            color="intensity"
+            lookContributors={[]}
+            hasManualValue={false}
+            isOverridden={false}
+            isFrozen={false}
+            lookIntensity={0}
+            customTrackGradient={trackGradient}
           />
         </div>
       );
