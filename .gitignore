@@ -27,3 +27,5 @@ desktop.ini
 .env
 .env.local
 .env.production
+
+dist/
