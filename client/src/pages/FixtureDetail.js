@@ -358,13 +358,29 @@ function FixtureDetail() {
   const handleClear = () => {
     if (!profile) return;
 
-    // Apply default values from profile controls
-    const updates = {};
-    profile.controls.forEach(control => {
-      if (control.components) {
-        applyControlDefaults(control, updates);
-      }
+    const hasActiveLook = (config.looks || []).some(look => {
+      const level = state.looks?.[look.id] ?? 0;
+      return level > 0 && look.targets?.[fixtureId];
     });
+
+    const updates = {};
+    if (hasActiveLook) {
+      // Allow looks to take control by zeroing direct values
+      if (profile.controls) {
+        profile.controls.forEach(control => {
+          control.components?.forEach(comp => {
+            updates[comp.name] = 0;
+          });
+        });
+      }
+    } else {
+      // Apply default values from profile controls
+      profile.controls.forEach(control => {
+        if (control.components) {
+          applyControlDefaults(control, updates);
+        }
+      });
+    }
 
     sendUpdate({
       fixtures: { [fixtureId]: updates },

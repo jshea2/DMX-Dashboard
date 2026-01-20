@@ -627,32 +627,73 @@ const Dashboard = () => {
     }
   };
 
+  const hasActiveLookForFixture = useCallback((fixtureId) => {
+    return (config?.looks || []).some(look => {
+      const level = state.looks?.[look.id] ?? 0;
+      return level > 0 && look.targets?.[fixtureId];
+    });
+  }, [config?.looks, state.looks]);
+
+  const getActiveLooksForFixture = useCallback((fixtureId) => {
+    const activeLooks = [];
+    (config?.looks || []).forEach(look => {
+      const lookLevel = state.looks?.[look.id] ?? 0;
+      if (lookLevel > 0 && look.targets?.[fixtureId]) {
+        activeLooks.push({ id: look.id, color: look.color || 'blue', level: lookLevel });
+      }
+    });
+    return activeLooks;
+  }, [config?.looks, state.looks]);
+
+  const setFixtureChannelsToZero = (profile, fixtureState) => {
+    if (profile.controls && Array.isArray(profile.controls)) {
+      profile.controls.forEach(control => {
+        if (control.components && Array.isArray(control.components)) {
+          control.components.forEach(comp => {
+            fixtureState[comp.name] = 0;
+          });
+        }
+      });
+    } else if (profile.channels) {
+      profile.channels.forEach(ch => {
+        fixtureState[ch.name] = 0;
+      });
+    }
+  };
+
   const handleClearAllFixtures = () => {
     const clearedFixtures = {};
+    const overridesToClear = {};
     (config.fixtures || []).filter(f => f).forEach(fixture => {
       const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
       if (profile) {
         clearedFixtures[fixture.id] = {};
+        overridesToClear[fixture.id] = null;
 
-        // Apply defaults from Control Blocks
-        if (profile.controls && Array.isArray(profile.controls)) {
-          profile.controls.forEach(control => {
-            if (control.components && Array.isArray(control.components)) {
-              applyControlDefaults(control, clearedFixtures[fixture.id]);
-            }
-          });
-          applyDashboardClearDefaults(profile, fixture.id, clearedFixtures[fixture.id]);
-        } else if (profile.channels) {
-          // Legacy fallback - set all to 0
-          profile.channels.forEach(ch => {
-            clearedFixtures[fixture.id][ch.name] = 0;
-          });
-          resetFixtureColorCache([fixture.id]);
+        const hasActiveLook = hasActiveLookForFixture(fixture.id);
+        if (hasActiveLook) {
+          setFixtureChannelsToZero(profile, clearedFixtures[fixture.id]);
+        } else {
+          // Apply defaults from Control Blocks
+          if (profile.controls && Array.isArray(profile.controls)) {
+            profile.controls.forEach(control => {
+              if (control.components && Array.isArray(control.components)) {
+                applyControlDefaults(control, clearedFixtures[fixture.id]);
+              }
+            });
+            applyDashboardClearDefaults(profile, fixture.id, clearedFixtures[fixture.id]);
+          } else if (profile.channels) {
+            // Legacy fallback - set all to 0
+            profile.channels.forEach(ch => {
+              clearedFixtures[fixture.id][ch.name] = 0;
+            });
+            resetFixtureColorCache([fixture.id]);
+          }
         }
       }
     });
     console.log('[Dashboard] Clear button clicked - applying defaults:', clearedFixtures);
-    sendUpdate({ fixtures: clearedFixtures });
+    sendUpdate({ fixtures: clearedFixtures, overriddenFixtures: overridesToClear });
     // Clear overrides, manual adjustments, and frozen channels
     setChannelOverrides({});
     setManuallyAdjusted({});
@@ -856,14 +897,21 @@ const Dashboard = () => {
                                       applyControlDefaults(control, fixturesToClear[fixture.id]);
                                     }
                                   });
-                                  applyDashboardClearDefaults(profile, fixture.id, fixturesToClear[fixture.id]);
+                                  const hasActiveLook = hasActiveLookForFixture(fixture.id);
+                                  if (hasActiveLook) {
+                                    setFixtureChannelsToZero(profile, fixturesToClear[fixture.id]);
+                                  } else {
+                                    applyDashboardClearDefaults(profile, fixture.id, fixturesToClear[fixture.id]);
+                                  }
                                 } else if (profile.channels) {
                                   // Legacy fallback
                                   profile.channels.forEach(ch => {
                                     delete newOverrides[`${fixture.id}.${ch.name}`];
                                     fixturesToClear[fixture.id][ch.name] = 0;
                                   });
-                                  resetFixtureColorCache([fixture.id]);
+                                  if (!hasActiveLookForFixture(fixture.id)) {
+                                    resetFixtureColorCache([fixture.id]);
+                                  }
                                 }
                               }
                             }
@@ -1216,7 +1264,39 @@ const Dashboard = () => {
                             step={1}
                             unit="%"
                             onChange={(value) => {
-                              handleFixtureChange(fixture.id, intensityChannelName, value);
+                              const activeLooksForFixture = getActiveLooksForFixture(fixture.id);
+                              const hasActiveLooks = activeLooksForFixture.length > 0;
+
+                              if (pendingClearRef.current.has(fixture.id)) {
+                                pendingClearRef.current.delete(fixture.id);
+                              }
+
+                              setFrozenChannels(prev => {
+                                if (prev[intensityChannelName] !== undefined) {
+                                  const updated = { ...prev };
+                                  delete updated[intensityChannelName];
+                                  return updated;
+                                }
+                                return prev;
+                              });
+
+                              if (hasActiveLooks) {
+                                setChannelOverrides(prev => ({ ...prev, [intensityChannelName]: true }));
+                              }
+
+                              sendUpdate({
+                                fixtures: {
+                                  [fixture.id]: {
+                                    [intensityChannelName]: value
+                                  }
+                                },
+                                overriddenFixtures: hasActiveLooks ? {
+                                  [fixture.id]: {
+                                    active: true,
+                                    looks: activeLooksForFixture.map(look => ({ id: look.id, color: look.color }))
+                                  }
+                                } : undefined
+                              });
                             }}
                             color="intensity"
                             disabled={dashboardRole === 'viewer'}
@@ -1235,9 +1315,45 @@ const Dashboard = () => {
                               const nextS = cached?.s ?? s;
                               setFixtureHsv(fixture.id, { h: nextH, s: nextS, v });
                               const nextRgb = hsvToRgb(nextH, nextS, v);
-                              handleFixtureChange(fixture.id, redComp.name, nextRgb.r || 0);
-                              handleFixtureChange(fixture.id, greenComp.name, nextRgb.g || 0);
-                              handleFixtureChange(fixture.id, blueComp.name, nextRgb.b || 0);
+
+                              if (pendingClearRef.current.has(fixture.id)) {
+                                pendingClearRef.current.delete(fixture.id);
+                              }
+
+                              setFrozenChannels(prev => {
+                                const updated = { ...prev };
+                                delete updated[redComp.name];
+                                delete updated[greenComp.name];
+                                delete updated[blueComp.name];
+                                return updated;
+                              });
+
+                              const activeLooksForFixture = getActiveLooksForFixture(fixture.id);
+                              const hasActiveLooks = activeLooksForFixture.length > 0;
+                              if (hasActiveLooks) {
+                                setChannelOverrides(prev => ({
+                                  ...prev,
+                                  [redComp.name]: true,
+                                  [greenComp.name]: true,
+                                  [blueComp.name]: true
+                                }));
+                              }
+
+                              sendUpdate({
+                                fixtures: {
+                                  [fixture.id]: {
+                                    [redComp.name]: nextRgb.r || 0,
+                                    [greenComp.name]: nextRgb.g || 0,
+                                    [blueComp.name]: nextRgb.b || 0
+                                  }
+                                },
+                                overriddenFixtures: hasActiveLooks ? {
+                                  [fixture.id]: {
+                                    active: true,
+                                    looks: activeLooksForFixture.map(look => ({ id: look.id, color: look.color }))
+                                  }
+                                } : undefined
+                              });
                             }}
                             disabled={dashboardRole === 'viewer'}
                             showWheel={false}
