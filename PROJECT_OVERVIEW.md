@@ -1,4 +1,4 @@
-# NMS DMX App - Project Overview
+# DMX Dashboard - Project Overview
 
 ## Architecture
 
@@ -23,7 +23,7 @@
 ## Application Structure
 
 ```
-NMS DMX App/
+DMX Dashboard/
 ├── server/
 │   ├── server.js          # Express + WebSocket server
 │   ├── config.js          # Configuration management
@@ -296,4 +296,4 @@ Or use `install.bat` and `start.bat` on Windows.
 
 ## License & Usage
 
-Internal use for NMS faculty. Not for redistribution.
+Internal use for DMX Dashboard. Not for redistribution.

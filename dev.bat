@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo NMS DMX Control - Development Mode
+echo DMX Dashboard - Development Mode
 echo ========================================
 echo.
 

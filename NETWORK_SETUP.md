@@ -2,7 +2,7 @@
 
 ## Overview
 
-The NMS DMX Control application now supports binding different services to specific network interfaces. This allows you to have:
+The DMX Dashboard application now supports binding different services to specific network interfaces. This allows you to have:
 - **One network interface** dedicated to DMX output (Art-Net/sACN)
 - **Another network interface** for the web application and client connections
 
@@ -15,7 +15,7 @@ This is a professional lighting control setup that isolates DMX traffic from gen
 │   Windows PC / Mac          │
 │                             │
 │  ┌──────────────────────┐   │
-│  │  NMS DMX App Server  │   │
+│  │  DMX Dashboard Server  │   │
 │  │                      │   │
 │  │  Web Server:         │───┼───► NIC 2: WiFi/LAN
 │  │   Port 3001          │   │     (e.g., 10.25.231.56)

@@ -1,7 +1,14 @@
 const fs = require('fs');
 const path = require('path');
 
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+const CONFIG_FILE = process.env.DMX_CONFIG_PATH || path.join(__dirname, 'config.json');
+
+const ensureConfigDir = () => {
+  const dir = path.dirname(CONFIG_FILE);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+};
 
 const DEFAULT_CONFIG = {
   fixtureProfiles: [
@@ -378,6 +385,7 @@ class Config {
 
   save() {
     try {
+      ensureConfigDir();
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 2));
       return true;
     } catch (error) {

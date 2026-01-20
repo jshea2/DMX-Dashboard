@@ -1,6 +1,6 @@
 # File Reference Guide
 
-Quick reference for all files in the NMS DMX Control application.
+Quick reference for all files in the DMX Dashboard application.
 
 ## Documentation Files
 

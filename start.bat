@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo NMS DMX Lighting Control
+echo DMX Dashboard
 echo ========================================
 echo.
 

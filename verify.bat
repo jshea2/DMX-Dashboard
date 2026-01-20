@@ -1,6 +1,6 @@
 @echo off
 echo ========================================
-echo NMS DMX Control - Installation Verification
+echo DMX Dashboard - Installation Verification
 echo ========================================
 echo.
 

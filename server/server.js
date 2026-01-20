@@ -619,7 +619,7 @@ outputEngine.start();
 
 // Get server configuration
 const serverCfg = config.get();
-const serverPort = serverCfg.server?.port || PORT;
+const serverPort = process.env.DMX_SERVER_PORT || process.env.PORT || serverCfg.server?.port || PORT;
 const serverBindAddress = serverCfg.server?.bindAddress || '0.0.0.0';
 
 // Start server

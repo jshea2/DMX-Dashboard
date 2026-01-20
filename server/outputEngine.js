@@ -141,7 +141,7 @@ class OutputEngine {
         if (!this.packets[clientKey]) {
           const packet = client.createPacket(512);
           packet.setCID(this.cid);
-          packet.setSourceName('NMS DMX Control');
+          packet.setSourceName('DMX Dashboard');
           packet.setUniverse(universeInt);
           this.packets[clientKey] = packet;
         }
@@ -198,7 +198,7 @@ class OutputEngine {
           if (!this.packets[clientKey]) {
             const packet = client.createPacket(512);
             packet.setCID(this.cid);
-            packet.setSourceName('NMS DMX Control');
+            packet.setSourceName('DMX Dashboard');
             packet.setUniverse(universeInt);
             this.packets[clientKey] = packet;
           }
