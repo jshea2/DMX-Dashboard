@@ -8,6 +8,9 @@
 
 - [Download DMX Dashboard](../../releases)
 
+<img width="306" height="506" alt="Screenshot 2026-01-19 at 11 37 48 PM" src="https://github.com/user-attachments/assets/35d572d0-08ff-414f-aa4e-4f373c1f116a" />
+
+
 ## Install
 
 - macOS: open the `.dmg` and drag **DMX Dashboard** to Applications
