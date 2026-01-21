@@ -216,7 +216,7 @@ const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) =>
 const Dashboard = () => {
   const navigate = useNavigate();
   const { urlSlug } = useParams();
-  const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients, getDashboardRole, isEditorAnywhere, hsvCache, setFixtureHsv, resetFixtureHsv } = useWebSocketContext();
+  const { state, sendUpdate, connected, role, shortId, requestAccess, activeClients, getDashboardRole, isEditorAnywhere, configVersion, hsvCache, setFixtureHsv, resetFixtureHsv } = useWebSocketContext();
   const [config, setConfig] = useState(null);
   const [activeLayout, setActiveLayout] = useState(null);
   const [recordingLook, setRecordingLook] = useState(null);
@@ -228,6 +228,9 @@ const Dashboard = () => {
   const lastRgbByFixtureRef = useRef({});
   const lastHsvByFixtureRef = useRef({});
   const pendingClearRef = useRef(new Set());
+  const sendDashboardUpdate = useCallback((data) => {
+    sendUpdate(data, activeLayout?.id);
+  }, [sendUpdate, activeLayout?.id]);
   const resetFixtureColorCache = useCallback((fixtureIds) => {
     fixtureIds.forEach(fixtureId => {
       lastRgbByFixtureRef.current[fixtureId] = { r: 0, g: 0, b: 0 };
@@ -301,75 +304,81 @@ const Dashboard = () => {
       });
       
       if (Object.keys(fixturesToClear).length > 0) {
-        sendUpdate({ fixtures: fixturesToClear });
+        sendDashboardUpdate({ fixtures: fixturesToClear });
       }
     }
-  }, [channelsToRelease, sendUpdate]);
+  }, [channelsToRelease, sendDashboardUpdate]);
 
-  useEffect(() => {
-    const fetchConfigData = async () => {
-      try {
-        // Fetch config to get layout and other data
-        const configRes = await fetch('/api/config');
-        const data = await configRes.json();
+  const fetchConfigData = useCallback(async () => {
+    try {
+      // Fetch config to get layout and other data
+      const configRes = await fetch('/api/config');
+      const data = await configRes.json();
 
-        // Ensure data has required structure
-        if (!data) {
-          console.error('[Dashboard] Config fetch returned null/undefined');
-          return;
-        }
-        if (!data.fixtureProfiles) {
-          console.error('[Dashboard] Config missing fixtureProfiles');
-          data.fixtureProfiles = [];
-        }
-        if (!data.fixtures) {
-          console.error('[Dashboard] Config missing fixtures');
-          data.fixtures = [];
-        }
+      // Ensure data has required structure
+      if (!data) {
+        console.error('[Dashboard] Config fetch returned null/undefined');
+        return;
+      }
+      if (!data.fixtureProfiles) {
+        console.error('[Dashboard] Config missing fixtureProfiles');
+        data.fixtureProfiles = [];
+      }
+      if (!data.fixtures) {
+        console.error('[Dashboard] Config missing fixtures');
+        data.fixtures = [];
+      }
 
-        setConfig(data);
+      setConfig(data);
 
-        // Find layout by urlSlug
-        let layout = data.showLayouts?.find(l => l.urlSlug === urlSlug);
+      // Find layout by urlSlug
+      let layout = data.showLayouts?.find(l => l.urlSlug === urlSlug);
 
-        if (!layout) {
-          // Dashboard not found - redirect to menu
-          console.error(`Dashboard with slug '${urlSlug}' not found`);
+      if (!layout) {
+        // Dashboard not found - redirect to menu
+        console.error(`Dashboard with slug '${urlSlug}' not found`);
+        setAccessDenied(true);
+        navigate('/dashboard', { replace: true });
+        return;
+      }
+
+      // Get user's role for this specific dashboard
+      const userDashboardRole = getDashboardRole ? getDashboardRole(layout.id) : role;
+      setDashboardRole(userDashboardRole);
+
+      // Check access based on dashboard's access control settings
+      const accessControl = layout.accessControl || { requireExplicitAccess: false };
+
+      // If dashboard requires explicit access, check if user has dashboard-specific role
+      if (accessControl.requireExplicitAccess && getDashboardRole) {
+        const hasExplicitAccess = getDashboardRole(layout.id) != null;
+        if (!hasExplicitAccess) {
+          console.warn(`Access denied: Dashboard '${layout.name}' requires explicit access`);
+          alert(`You don't have access to this dashboard. Please request access from an administrator.`);
           setAccessDenied(true);
           navigate('/dashboard', { replace: true });
           return;
         }
-
-        // Get user's role for this specific dashboard
-        const userDashboardRole = getDashboardRole ? getDashboardRole(layout.id) : role;
-        setDashboardRole(userDashboardRole);
-
-        // Check access based on dashboard's access control settings
-        const accessControl = layout.accessControl || { requireExplicitAccess: false };
-
-        // If dashboard requires explicit access, check if user has dashboard-specific role
-        if (accessControl.requireExplicitAccess && getDashboardRole) {
-          const hasExplicitAccess = getDashboardRole(layout.id) != null;
-          if (!hasExplicitAccess) {
-            console.warn(`Access denied: Dashboard '${layout.name}' requires explicit access`);
-            alert(`You don't have access to this dashboard. Please request access from an administrator.`);
-            setAccessDenied(true);
-            navigate('/dashboard', { replace: true });
-            return;
-          }
-        }
-
-        setActiveLayout(layout);
-      } catch (err) {
-        console.error('Failed to fetch config:', err);
-        setAccessDenied(true);
       }
-    };
 
+      setActiveLayout(layout);
+    } catch (err) {
+      console.error('Failed to fetch config:', err);
+      setAccessDenied(true);
+    }
+  }, [urlSlug, navigate, getDashboardRole, role]);
+
+  useEffect(() => {
     if (urlSlug) {
       fetchConfigData();
     }
-  }, [urlSlug, navigate, getDashboardRole, role]);
+  }, [urlSlug, fetchConfigData]);
+
+  useEffect(() => {
+    if (urlSlug) {
+      fetchConfigData();
+    }
+  }, [configVersion, urlSlug, fetchConfigData]);
 
   // Update dashboard role when getDashboardRole changes (e.g., when role is updated via WebSocket)
   useEffect(() => {
@@ -392,11 +401,11 @@ const Dashboard = () => {
   }, [activeLayout?.backgroundColor]);
 
   const handleBlackout = () => {
-    sendUpdate({ blackout: !state.blackout });
+    sendDashboardUpdate({ blackout: !state.blackout });
   };
 
   const handleLookChange = (lookId, value) => {
-    sendUpdate({
+    sendDashboardUpdate({
       looks: {
         [lookId]: value / 100
       }
@@ -404,7 +413,7 @@ const Dashboard = () => {
   };
 
   const handleFixtureChange = useCallback((fixtureId, property, value) => {
-    sendUpdate({
+    sendDashboardUpdate({
       fixtures: {
         [fixtureId]: {
           [property]: value
@@ -435,7 +444,7 @@ const Dashboard = () => {
     if (meta?.contributors?.length > 0) {
       setChannelOverrides(prev => ({ ...prev, [key]: true }));
     }
-  }, [sendUpdate]);
+  }, [sendDashboardUpdate]);
 
   // Get or create a stable RGB change handler for a specific fixture
   const getRGBChangeHandler = useCallback((fixtureId, redChannel, greenChannel, blueChannel) => {
@@ -510,7 +519,7 @@ const Dashboard = () => {
           overridesToClear[fixtureId] = null; // null clears the override
         });
         if (Object.keys(overridesToClear).length > 0) {
-          sendUpdate({ overriddenFixtures: overridesToClear });
+          sendDashboardUpdate({ overriddenFixtures: overridesToClear });
         }
         
         // Convert ALL current displayed values to frozen channels (grey outline)
@@ -567,7 +576,7 @@ const Dashboard = () => {
       overridesToClear[fixtureId] = null;
     });
 
-    sendUpdate({
+    sendDashboardUpdate({
       looks: clearedLooks,
       overriddenFixtures: Object.keys(overridesToClear).length > 0 ? overridesToClear : undefined
     });
@@ -693,7 +702,7 @@ const Dashboard = () => {
       }
     });
     console.log('[Dashboard] Clear button clicked - applying defaults:', clearedFixtures);
-    sendUpdate({ fixtures: clearedFixtures, overriddenFixtures: overridesToClear });
+    sendDashboardUpdate({ fixtures: clearedFixtures, overriddenFixtures: overridesToClear });
     // Clear overrides, manual adjustments, and frozen channels
     setChannelOverrides({});
     setManuallyAdjusted({});
@@ -919,7 +928,7 @@ const Dashboard = () => {
                           console.log('[Dashboard] Clear Overrides clicked - sending fixture resets:', fixturesToClear);
                           setChannelOverrides(newOverrides);
                           if (Object.keys(fixturesToClear).length > 0) {
-                            sendUpdate({ fixtures: fixturesToClear });
+                            sendDashboardUpdate({ fixtures: fixturesToClear });
                             resetFixtureColorCache(Object.keys(fixturesToClear));
                           }
                         } else {
@@ -1115,16 +1124,45 @@ const Dashboard = () => {
                   e.stopPropagation(); // Prevent navigation to detail page
                   if (toggleComponents.length === 0 || dashboardRole === 'viewer') return;
 
-                  const newValue = brightnessValue > 0 ? 0 : 100;
+                  const turningOff = brightnessValue > 0;
                   const updates = {};
-                  toggleComponents.forEach(comp => {
-                    updates[comp.name] = newValue;
-                  });
 
-                  sendUpdate({
+                  if (intensityChannelName) {
+                    const newValue = turningOff ? 0 : 100;
+                    toggleComponents.forEach(comp => {
+                      updates[comp.name] = newValue;
+                    });
+                  } else if (rgbControl && redComp && greenComp && blueComp) {
+                    if (turningOff) {
+                      toggleComponents.forEach(comp => {
+                        updates[comp.name] = 0;
+                      });
+                    } else {
+                      const cached = hsvCache?.[fixture.id] || lastHsvByFixtureRef.current[fixture.id];
+                      const hsv = cached || { h: 0, s: 0, v: 100 };
+                      const restoredV = hsv.v > 0 ? hsv.v : 100;
+                      const rgb = hsvToRgb(hsv.h, hsv.s, restoredV);
+                      updates[redComp.name] = rgb.r || 0;
+                      updates[greenComp.name] = rgb.g || 0;
+                      updates[blueComp.name] = rgb.b || 0;
+                      toggleComponents.forEach(comp => {
+                        if (comp.type === 'white') {
+                          updates[comp.name] = 0;
+                        }
+                      });
+                      setFixtureHsv(fixture.id, { h: hsv.h, s: hsv.s, v: restoredV });
+                    }
+                  }
+
+                  const fixtureHsv = (!turningOff && !intensityChannelName && rgbControl && redComp && greenComp && blueComp)
+                    ? { [fixture.id]: { h: (hsvCache?.[fixture.id]?.h ?? lastHsvByFixtureRef.current[fixture.id]?.h ?? 0), s: (hsvCache?.[fixture.id]?.s ?? lastHsvByFixtureRef.current[fixture.id]?.s ?? 0), v: (hsvCache?.[fixture.id]?.v ?? lastHsvByFixtureRef.current[fixture.id]?.v ?? 100) } }
+                    : undefined;
+
+                  sendDashboardUpdate({
                     fixtures: {
                       [fixture.id]: updates
-                    }
+                    },
+                    fixtureHsv: fixtureHsv
                   });
                 };
 
@@ -1161,7 +1199,7 @@ const Dashboard = () => {
                     if (target.closest('input[type="range"]')) return;
                     if (target.closest('.fixture-card-action')) return;
                   }
-                  navigate(`/fixture/${fixture.id}`);
+                  navigate(`/fixture/${fixture.id}`, { state: { dashboardId: activeLayout?.id } });
                 };
 
                 return (
@@ -1284,7 +1322,7 @@ const Dashboard = () => {
                                 setChannelOverrides(prev => ({ ...prev, [intensityChannelName]: true }));
                               }
 
-                              sendUpdate({
+                              sendDashboardUpdate({
                                 fixtures: {
                                   [fixture.id]: {
                                     [intensityChannelName]: value
@@ -1339,13 +1377,16 @@ const Dashboard = () => {
                                 }));
                               }
 
-                              sendUpdate({
+                              sendDashboardUpdate({
                                 fixtures: {
                                   [fixture.id]: {
                                     [redComp.name]: nextRgb.r || 0,
                                     [greenComp.name]: nextRgb.g || 0,
                                     [blueComp.name]: nextRgb.b || 0
                                   }
+                                },
+                                fixtureHsv: {
+                                  [fixture.id]: { h: nextH, s: nextS, v }
                                 },
                                 overriddenFixtures: hasActiveLooks ? {
                                   [fixture.id]: {
@@ -1411,7 +1452,12 @@ const Dashboard = () => {
         </button>
       )}
 
-      <ConnectedUsers activeClients={activeClients} show={activeLayout?.showConnectedUsers !== false} />
+      <ConnectedUsers
+        activeClients={activeClients}
+        show={activeLayout?.showConnectedUsers !== false}
+        dashboardId={activeLayout?.id}
+        defaultRole={activeLayout?.accessControl?.defaultRole}
+      />
     </div>
   );
 };

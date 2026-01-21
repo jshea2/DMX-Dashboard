@@ -72,8 +72,26 @@ class ClientManager {
 
     // Override to editor if localhost
     if (isLocalhost) {
-      client.role = 'editor';
-      console.log(`Localhost detected: ${clientId.substring(0, 6)} auto-promoted to editor`);
+      let didUpdate = false;
+      if (client.role !== 'editor') {
+        client.role = 'editor';
+        didUpdate = true;
+      }
+      if (currentConfig.showLayouts && currentConfig.showLayouts.length > 0) {
+        if (!client.dashboardAccess) {
+          client.dashboardAccess = {};
+        }
+        currentConfig.showLayouts.forEach((layout) => {
+          if (client.dashboardAccess[layout.id] !== 'editor') {
+            client.dashboardAccess[layout.id] = 'editor';
+            didUpdate = true;
+          }
+        });
+      }
+      if (didUpdate) {
+        config.update(currentConfig);
+        console.log(`Localhost detected: ${clientId.substring(0, 6)} auto-promoted to editor`);
+      }
     }
 
     return client;

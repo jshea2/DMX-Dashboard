@@ -1,6 +1,6 @@
 import React from 'react';
 
-const ConnectedUsers = ({ activeClients, show }) => {
+const ConnectedUsers = ({ activeClients, show, dashboardId, defaultRole }) => {
   if (!show || !activeClients || activeClients.length === 0) {
     return null;
   }
@@ -24,7 +24,18 @@ const ConnectedUsers = ({ activeClients, show }) => {
         Connected Users
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-        {activeClients.map((client) => (
+        {activeClients.map((client) => {
+          let effectiveRole = client.role;
+          if (client.role === 'editor') {
+            effectiveRole = 'editor';
+          } else if (dashboardId && client.dashboardAccess && client.dashboardAccess[dashboardId]) {
+            effectiveRole = client.dashboardAccess[dashboardId];
+          } else if (client.role !== 'viewer') {
+            effectiveRole = client.role;
+          } else if (dashboardId && defaultRole) {
+            effectiveRole = defaultRole;
+          }
+          return (
           <div
             key={client.id}
             style={{
@@ -51,22 +62,22 @@ const ConnectedUsers = ({ activeClients, show }) => {
                 fontSize: '10px',
                 padding: '2px 4px',
                 borderRadius: '3px',
-                background: client.role === 'editor' ? '#2a4a2a' :
-                           client.role === 'moderator' ? '#4a2a4a' :
-                           client.role === 'controller' ? '#4a3a2a' : '#2a2a4a',
-                color: client.role === 'editor' ? '#4ae24a' :
-                       client.role === 'moderator' ? '#e24ae2' :
-                       client.role === 'controller' ? '#e2904a' : '#4a90e2',
+                background: effectiveRole === 'editor' ? '#2a4a2a' :
+                           effectiveRole === 'moderator' ? '#4a2a4a' :
+                           effectiveRole === 'controller' ? '#4a3a2a' : '#2a2a4a',
+                color: effectiveRole === 'editor' ? '#4ae24a' :
+                       effectiveRole === 'moderator' ? '#e24ae2' :
+                       effectiveRole === 'controller' ? '#e2904a' : '#4a90e2',
                 textTransform: 'uppercase',
                 fontWeight: '600'
               }}
             >
-              {client.role === 'editor' ? 'E' :
-               client.role === 'moderator' ? 'M' :
-               client.role === 'controller' ? 'C' : 'V'}
+              {effectiveRole === 'editor' ? 'E' :
+               effectiveRole === 'moderator' ? 'M' :
+               effectiveRole === 'controller' ? 'C' : 'V'}
             </span>
           </div>
-        ))}
+        );})}
       </div>
     </div>
   );

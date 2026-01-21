@@ -76,7 +76,7 @@ function generateDefaultState() {
     looks[look.id] = 0;
   });
 
-  return { blackout: false, fixtures, looks, overriddenFixtures: {} };
+  return { blackout: false, fixtures, looks, overriddenFixtures: {}, fixtureHsv: {} };
 }
 
 class State {
@@ -108,7 +108,8 @@ class State {
       blackout: this.state.blackout,
       fixtures: mergedFixtures,
       looks: mergedLooks,
-      overriddenFixtures: this.state.overriddenFixtures || {}
+      overriddenFixtures: this.state.overriddenFixtures || {},
+      fixtureHsv: this.state.fixtureHsv || {}
     };
     this.notifyListeners();
   }
@@ -133,6 +134,13 @@ class State {
           ...updates.fixtures[fixtureId]
         };
       });
+    }
+
+    if (updates.fixtureHsv) {
+      this.state.fixtureHsv = {
+        ...this.state.fixtureHsv,
+        ...updates.fixtureHsv
+      };
     }
 
     // Handle overriddenFixtures updates

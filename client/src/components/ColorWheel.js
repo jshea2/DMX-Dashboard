@@ -393,6 +393,9 @@ const ColorWheel = ({
 
   const handleMouseMove = useCallback((event) => {
     if (!isDragging || disabled) return;
+    if (event.cancelable && event.touches) {
+      event.preventDefault();
+    }
     handleInteraction(event);
   }, [isDragging, disabled, handleInteraction]);
 
@@ -405,7 +408,7 @@ const ColorWheel = ({
     if (isDragging) {
       window.addEventListener('mousemove', handleMouseMove);
       window.addEventListener('mouseup', handleMouseUp);
-      window.addEventListener('touchmove', handleMouseMove);
+      window.addEventListener('touchmove', handleMouseMove, { passive: false });
       window.addEventListener('touchend', handleMouseUp);
 
       return () => {

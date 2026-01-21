@@ -8,6 +8,8 @@ const DEFAULT_PORT = 3000;
 const isDev = !app.isPackaged;
 
 let serverProcess = null;
+let serverLogPath = null;
+let serverLogStream = null;
 
 app.setName('DMX Dashboard');
 
@@ -83,25 +85,61 @@ const startServer = () => {
     return readServerPort();
   }
 
+  serverLogPath = path.join(app.getPath('userData'), 'server.log');
+  serverLogStream = fs.createWriteStream(serverLogPath, { flags: 'a' });
+
   serverProcess = fork(serverEntry, [], {
+    execPath: process.execPath,
     env: {
       ...process.env,
       NODE_ENV: 'production',
+      ELECTRON_RUN_AS_NODE: '1',
       DMX_CONFIG_PATH: configPath
     },
-    stdio: 'inherit'
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc']
+  });
+
+  if (serverProcess.stdout && serverLogStream) {
+    serverProcess.stdout.pipe(serverLogStream);
+  }
+  if (serverProcess.stderr && serverLogStream) {
+    serverProcess.stderr.pipe(serverLogStream);
+  }
+
+  serverProcess.on('exit', (code, signal) => {
+    if (serverLogStream && !serverLogStream.writableEnded) {
+      serverLogStream.write(`\n[server] exited code=${code} signal=${signal}\n`);
+    }
   });
 
   return readServerPort();
+};
+
+const showLoadError = (win, message) => {
+  const safeMessage = message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const logNote = serverLogPath ? `Server log: ${serverLogPath}` : 'Server log not available yet.';
+  const html = `
+    <html>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:#1a1a2e; color:#fff; padding:32px;">
+        <h2>DMX Dashboard failed to load</h2>
+        <p>${safeMessage}</p>
+        <p>${logNote}</p>
+        <p>Try restarting the app. If it still fails, send the log file.</p>
+      </body>
+    </html>
+  `;
+  win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 };
 
 const createWindow = async () => {
   const port = startServer();
   const startUrl = process.env.ELECTRON_START_URL || `http://127.0.0.1:${port}`;
   const waitPort = getPortFromUrl(startUrl) || port;
+  let serverReady = true;
   try {
     await waitForServer(waitPort);
   } catch (err) {
+    serverReady = false;
     console.warn('[Electron] Server wait timeout:', err.message);
   }
 
@@ -119,7 +157,15 @@ const createWindow = async () => {
     }
   });
 
-  win.loadURL(startUrl);
+  if (serverReady) {
+    win.loadURL(startUrl);
+  } else {
+    showLoadError(win, `Server did not respond on ${startUrl}.`);
+  }
+
+  win.webContents.on('did-fail-load', (_event, _code, desc) => {
+    showLoadError(win, `Failed to load ${startUrl}. ${desc}`);
+  });
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -143,5 +189,9 @@ app.on('before-quit', () => {
   if (serverProcess) {
     serverProcess.kill();
     serverProcess = null;
+  }
+  if (serverLogStream) {
+    serverLogStream.end();
+    serverLogStream = null;
   }
 });

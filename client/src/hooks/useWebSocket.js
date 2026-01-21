@@ -14,7 +14,8 @@ const useWebSocket = () => {
       panel2: { hue: 0, brightness: 0 },
       par1: { intensity: 0 },
       par2: { intensity: 0 }
-    }
+    },
+    fixtureHsv: {}
   });
 
   const [connected, setConnected] = useState(false);
@@ -25,6 +26,7 @@ const useWebSocket = () => {
   const [dashboardAccess, setDashboardAccess] = useState({}); // Per-dashboard role assignments
   const [isEditorAnywhere, setIsEditorAnywhere] = useState(false); // True if editor on any dashboard
   const [hsvCache, setHsvCache] = useState({});
+  const [configVersion, setConfigVersion] = useState(0);
 
   const ws = useRef(null);
   const reconnectTimeout = useRef(null);
@@ -68,6 +70,12 @@ const useWebSocket = () => {
 
         if (message.type === 'state') {
           setState(message.data);
+          if (message.data?.fixtureHsv) {
+            setHsvCache(prev => ({
+              ...prev,
+              ...message.data.fixtureHsv
+            }));
+          }
         } else if (message.type === 'authResult') {
           authenticated.current = true;
           setRole(message.role);
@@ -90,6 +98,8 @@ const useWebSocket = () => {
         } else if (message.type === 'activeClients') {
           setActiveClients(message.clients || []);
           setShowConnectedUsers(message.showConnectedUsers !== false);
+        } else if (message.type === 'configUpdated') {
+          setConfigVersion(message.version || Date.now());
         } else if (message.type === 'permissionDenied') {
           console.warn('Permission denied:', message.message);
           alert(message.message);
@@ -149,12 +159,13 @@ const useWebSocket = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Only run once on mount
 
-  const sendUpdate = useCallback((updates) => {
+  const sendUpdate = useCallback((updates, dashboardId = null) => {
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       try {
         ws.current.send(JSON.stringify({
           type: 'update',
-          data: updates
+          data: updates,
+          dashboardId: dashboardId || undefined
         }));
       } catch (error) {
         console.warn('Failed to send update, reconnecting...', error);
@@ -217,6 +228,7 @@ const useWebSocket = () => {
     dashboardAccess,
     isEditorAnywhere,
     getDashboardRole,
+    configVersion,
     hsvCache,
     setFixtureHsv,
     resetFixtureHsv

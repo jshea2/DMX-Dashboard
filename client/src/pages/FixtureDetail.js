@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useWebSocketContext } from '../contexts/WebSocketContext';
-import { rgbToHsv } from '../utils/color';
+import { rgbToHsv, hsvToRgb } from '../utils/color';
 import ColorWheel from '../components/ColorWheel';
 import Slider from '../components/Slider';
 import './FixtureDetail.css';
@@ -9,21 +9,34 @@ import './FixtureDetail.css';
 function FixtureDetail() {
   const { fixtureId } = useParams();
   const navigate = useNavigate();
-  const { state, sendUpdate, setFixtureHsv, hsvCache } = useWebSocketContext();
+  const location = useLocation();
+  const dashboardId = location.state?.dashboardId;
+  const { state, sendUpdate, setFixtureHsv, hsvCache, configVersion } = useWebSocketContext();
   const [config, setConfig] = useState(null);
   const [activeTab, setActiveTab] = useState(null);
   const [manuallyAdjusted, setManuallyAdjusted] = useState({}); // Tracks channels manually touched
   const [channelOverrides, setChannelOverrides] = useState({}); // Tracks override state (white outline)
   const [frozenChannels, setFrozenChannels] = useState({}); // Tracks frozen values after recording (grey outline)
   const [overriddenLooks, setOverriddenLooks] = useState([]); // Tracks which looks were active when override happened
+  const sendFixtureUpdate = useCallback((data) => {
+    sendUpdate(data, dashboardId);
+  }, [sendUpdate, dashboardId]);
 
-  // Fetch config
-  useEffect(() => {
+  const fetchConfig = useCallback(() => {
     fetch('/api/config')
       .then(res => res.json())
       .then(data => setConfig(data))
       .catch(err => console.error('Failed to fetch config:', err));
   }, []);
+
+  // Fetch config
+  useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
+
+  useEffect(() => {
+    fetchConfig();
+  }, [configVersion, fetchConfig]);
 
   // Find the fixture in config
   const fixture = config?.fixtures?.find(f => f.id === fixtureId);
@@ -279,9 +292,9 @@ function FixtureDetail() {
     });
 
     if (Object.keys(fixtureUpdates).length > 0) {
-      sendUpdate({ fixtures: { [fixtureId]: fixtureUpdates } });
+      sendFixtureUpdate({ fixtures: { [fixtureId]: fixtureUpdates } });
     }
-  }, [channelsToRelease, fixtureId, sendUpdate]);
+  }, [channelsToRelease, fixtureId, sendFixtureUpdate]);
 
   // If fixture not found, redirect back to dashboard
   useEffect(() => {
@@ -382,8 +395,9 @@ function FixtureDetail() {
       });
     }
 
-    sendUpdate({
+    sendFixtureUpdate({
       fixtures: { [fixtureId]: updates },
+      fixtureHsv: { [fixtureId]: { h: 0, s: 0, v: 100 } },
       overriddenFixtures: { [fixtureId]: null } // Clear the override
     });
 
@@ -465,91 +479,105 @@ function FixtureDetail() {
               </div>
             )}
           </div>
-          <ColorWheel
-            mode="rgb"
-            red={redMeta.displayValue}
-            green={greenMeta.displayValue}
-            blue={blueMeta.displayValue}
-            hasManualValue={hasOverrides || isActiveControl}
-            syncHueSatFromProps={!hasOverrides && !isActiveControl}
-            initialHsv={hsvCache?.[fixtureId]}
-            onChange={(r, g, b) => {
-              setFixtureHsv(fixtureId, rgbToHsv(r, g, b));
-              // Mark channels as manually adjusted
-              setManuallyAdjusted(prev => ({
-                ...prev,
-                [redComp.name]: true,
-                [greenComp.name]: true,
-                [blueComp.name]: true
-              }));
+          {(() => {
+            const cachedHsv = hsvCache?.[fixtureId];
+            const htpHsv = rgbToHsv(redMeta.displayValue || 0, greenMeta.displayValue || 0, blueMeta.displayValue || 0);
+            const displayHue = cachedHsv?.h ?? htpHsv.h;
+            const displaySat = cachedHsv?.s ?? htpHsv.s;
+            return (
+              <ColorWheel
+                mode="hsv"
+                hue={displayHue}
+                sat={displaySat}
+                brightness={htpHsv.v}
+                hasManualValue={hasOverrides || isActiveControl}
+                initialHsv={cachedHsv}
+                onChange={(h, s, v) => {
+                  setFixtureHsv(fixtureId, { h, s, v });
+                  const rgb = hsvToRgb(h, s, v);
+                  // Mark channels as manually adjusted
+                  setManuallyAdjusted(prev => ({
+                    ...prev,
+                    [redComp.name]: true,
+                    [greenComp.name]: true,
+                    [blueComp.name]: true
+                  }));
 
-              // If channel was frozen, release it when user manually moves it
-              setFrozenChannels(prev => {
-                const updated = { ...prev };
-                delete updated[redComp.name];
-                delete updated[greenComp.name];
-                delete updated[blueComp.name];
-                return updated;
-              });
+                  // If channel was frozen, release it when user manually moves it
+                  setFrozenChannels(prev => {
+                    const updated = { ...prev };
+                    delete updated[redComp.name];
+                    delete updated[greenComp.name];
+                    delete updated[blueComp.name];
+                    return updated;
+                  });
 
-              // Detect override: check if ANY look with level > 0 targets this fixture
-              // (more robust than checking specific channel contributors which may be 0)
-              const activeLooksForFixture = [];
-              config.looks?.forEach(look => {
-                const lookLevel = state.looks?.[look.id] || 0;
-                if (lookLevel > 0 && look.targets?.[fixtureId]) {
-                  activeLooksForFixture.push({ id: look.id, color: look.color || 'blue', level: lookLevel });
-                }
-              });
-
-              const hasActiveLooks = activeLooksForFixture.length > 0;
-
-              if (hasActiveLooks) {
-                setChannelOverrides(prev => ({
-                  ...prev,
-                  [redComp.name]: true,
-                  [greenComp.name]: true,
-                  [blueComp.name]: true
-                }));
-
-                // Save the contributing looks for grey dot display
-                setOverriddenLooks(activeLooksForFixture);
-
-                // Don't zero out looks - just mark fixture as overridden
-                // The override state will make HTP ignore looks for this fixture
-                sendUpdate({
-                  fixtures: {
-                    [fixtureId]: {
-                      [redComp.name]: r,
-                      [greenComp.name]: g,
-                      [blueComp.name]: b
+                  // Detect override: check if ANY look with level > 0 targets this fixture
+                  // (more robust than checking specific channel contributors which may be 0)
+                  const activeLooksForFixture = [];
+                  config.looks?.forEach(look => {
+                    const lookLevel = state.looks?.[look.id] || 0;
+                    if (lookLevel > 0 && look.targets?.[fixtureId]) {
+                      activeLooksForFixture.push({ id: look.id, color: look.color || 'blue', level: lookLevel });
                     }
-                  },
-                  overriddenFixtures: {
-                    [fixtureId]: {
-                      active: true,
-                      looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-                    }
+                  });
+
+                  const hasActiveLooks = activeLooksForFixture.length > 0;
+
+                  if (hasActiveLooks) {
+                    setChannelOverrides(prev => ({
+                      ...prev,
+                      [redComp.name]: true,
+                      [greenComp.name]: true,
+                      [blueComp.name]: true
+                    }));
+
+                    // Save the contributing looks for grey dot display
+                    setOverriddenLooks(activeLooksForFixture);
+
+                    // Don't zero out looks - just mark fixture as overridden
+                    // The override state will make HTP ignore looks for this fixture
+                    sendFixtureUpdate({
+                      fixtures: {
+                        [fixtureId]: {
+                          [redComp.name]: rgb.r,
+                          [greenComp.name]: rgb.g,
+                          [blueComp.name]: rgb.b
+                        }
+                      },
+                      fixtureHsv: {
+                        [fixtureId]: { h, s, v }
+                      },
+                      overriddenFixtures: {
+                        [fixtureId]: {
+                          active: true,
+                          looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
+                        }
+                      }
+                    });
+                  } else {
+                    // No override - normal update
+                    sendFixtureUpdate({
+                      fixtures: {
+                        [fixtureId]: {
+                          [redComp.name]: rgb.r,
+                          [greenComp.name]: rgb.g,
+                          [blueComp.name]: rgb.b
+                        }
+                      },
+                      fixtureHsv: {
+                        [fixtureId]: { h, s, v }
+                      }
+                    });
                   }
-                });
-              } else {
-                // No override - normal update
-                sendUpdate({
-                  fixtures: {
-                    [fixtureId]: {
-                      [redComp.name]: r,
-                      [greenComp.name]: g,
-                      [blueComp.name]: b
-                    }
-                  }
-                });
-              }
-            }}
-            isOverridden={false} // No grey outline on controls
-            isFrozen={false} // No frozen outline on controls
-            lookContributors={[]} // No colored outline from looks
-            lookIntensity={0} // No look intensity indicator
-          />
+                }}
+                isOverridden={false} // No grey outline on controls
+                isFrozen={false} // No frozen outline on controls
+                lookContributors={[]} // No colored outline from looks
+                lookIntensity={0} // No look intensity indicator
+              />
+            );
+          })()}
         </div>
       );
     } else if (control.controlType === 'Intensity' || control.controlType === 'Generic') {
@@ -597,7 +625,7 @@ function FixtureDetail() {
                 setOverriddenLooks(activeLooksForFixture);
 
                 // Don't zero out looks - just mark fixture as overridden
-                sendUpdate({
+                sendFixtureUpdate({
                   fixtures: {
                     [fixtureId]: {
                       [comp.name]: val
@@ -612,7 +640,7 @@ function FixtureDetail() {
                 });
               } else {
                 // No override - normal update
-                sendUpdate({
+                sendFixtureUpdate({
                   fixtures: {
                     [fixtureId]: {
                       [comp.name]: val
@@ -685,7 +713,7 @@ function FixtureDetail() {
                 setOverriddenLooks(activeLooksForFixture);
 
                 // Don't zero out looks - just mark fixture as overridden
-                sendUpdate({
+                sendFixtureUpdate({
                   fixtures: {
                     [fixtureId]: {
                       [comp.name]: scaledValue
@@ -700,7 +728,7 @@ function FixtureDetail() {
                 });
               } else {
                 // No override - normal update
-                sendUpdate({
+                sendFixtureUpdate({
                   fixtures: {
                     [fixtureId]: {
                       [comp.name]: scaledValue
@@ -771,7 +799,7 @@ function FixtureDetail() {
                 setOverriddenLooks(activeLooksForFixture);
 
                 // Don't zero out looks - just mark fixture as overridden
-                sendUpdate({
+                sendFixtureUpdate({
                   fixtures: {
                     [fixtureId]: {
                       [comp.name]: scaledValue
@@ -786,7 +814,7 @@ function FixtureDetail() {
                 });
               } else {
                 // No override - normal update
-                sendUpdate({
+                sendFixtureUpdate({
                   fixtures: {
                     [fixtureId]: {
                       [comp.name]: scaledValue
@@ -850,7 +878,7 @@ function FixtureDetail() {
                     setOverriddenLooks(activeLooksForFixture);
 
                     // Don't zero out looks - just mark fixture as overridden
-                    sendUpdate({
+                    sendFixtureUpdate({
                       fixtures: {
                         [fixtureId]: {
                           [comp.name]: val
@@ -865,7 +893,7 @@ function FixtureDetail() {
                     });
                   } else {
                     // No override - normal update
-                    sendUpdate({
+                    sendFixtureUpdate({
                       fixtures: {
                         [fixtureId]: {
                           [comp.name]: val

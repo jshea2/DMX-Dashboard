@@ -30,7 +30,7 @@ const TABS = [
 const SettingsPage = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { activeClients, role, isEditorAnywhere, dashboardAccess } = useWebSocket();
+  const { activeClients, role, isEditorAnywhere, dashboardAccess, configVersion } = useWebSocket();
   const [config, setConfig] = useState(null);
   const [originalConfig, setOriginalConfig] = useState(null);  // Track original for comparison
   const [saved, setSaved] = useState(false);
@@ -40,6 +40,7 @@ const SettingsPage = () => {
   const [networkInterfaces, setNetworkInterfaces] = useState([]);
   const [draggedItem, setDraggedItem] = useState(null);
   const [selectedDashboard, setSelectedDashboard] = useState('global'); // 'global' or dashboardId
+  const [lastDashboardSelection, setLastDashboardSelection] = useState(null);
 
   // Check URL query params for initial tab, or use last visited tab from localStorage
   const queryParams = new URLSearchParams(location.search);
@@ -178,6 +179,13 @@ const SettingsPage = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeClients]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) {
+      fetchConfig();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configVersion]);
 
   // Watch for URL changes and update active tab
   useEffect(() => {
@@ -702,7 +710,7 @@ const SettingsPage = () => {
         { type: 'green', name: 'green', offset: 1 },
         { type: 'blue', name: 'blue', offset: 2 }
       ],
-      defaultValue: { type: 'rgb', r: 1.0, g: 1.0, b: 1.0 }
+      defaultValue: { type: 'rgb', r: 0.0, g: 0.0, b: 0.0 }
     },
     'RGBW': {
       label: 'RGBW Color (4ch)',
@@ -715,7 +723,7 @@ const SettingsPage = () => {
         { type: 'blue', name: 'blue', offset: 2 },
         { type: 'white', name: 'white', offset: 3 }
       ],
-      defaultValue: { type: 'rgbw', r: 1.0, g: 1.0, b: 1.0, w: 1.0 }
+      defaultValue: { type: 'rgbw', r: 0.0, g: 0.0, b: 0.0, w: 0.0 }
     },
     'Generic': {
       label: 'Generic (1ch)',
@@ -1437,6 +1445,7 @@ const SettingsPage = () => {
     newConfig.looks.push({
       id: newId,
       name: 'New Look',
+      showRecordButton: true,
       targets
     });
     setConfig(newConfig);
@@ -1883,7 +1892,13 @@ const SettingsPage = () => {
           <div className="form-group">
             <select
               value={selectedDashboard}
-              onChange={(e) => setSelectedDashboard(e.target.value)}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                setSelectedDashboard(nextValue);
+                if (nextValue !== 'global') {
+                  setLastDashboardSelection(nextValue);
+                }
+              }}
               style={{
                 padding: '12px',
                 fontSize: '14px',
@@ -1958,6 +1973,12 @@ const SettingsPage = () => {
                       const isActive = activeClients.some(ac => ac.id === client.id);
                       const lastSeenDate = client.lastSeen ? new Date(client.lastSeen).toLocaleDateString() : 'Never';
                       const lastSeenTime = client.lastSeen ? new Date(client.lastSeen).toLocaleTimeString() : '';
+                      const isLocalServer = client.lastIp === '127.0.0.1' ||
+                        client.lastIp === '::1' ||
+                        client.lastIp === '::ffff:127.0.0.1' ||
+                        client.nickname === 'Server';
+                      const clientIsEditor = client.role === 'editor' ||
+                        Object.values(client.dashboardAccess || {}).includes('editor');
 
                       return (
                         <tr key={client.id} style={{ borderBottom: '1px solid #2a2a2a' }}>
@@ -2016,8 +2037,14 @@ const SettingsPage = () => {
                             </div>
                           </td>
                           {config.showLayouts.map((layout) => {
-                            const dashboardRole = client.dashboardAccess?.[layout.id] || layout.accessControl?.defaultRole || 'viewer';
+                            const dashboardRole = client.dashboardAccess?.[layout.id] ||
+                              (client.role === 'editor' ? 'editor' : layout.accessControl?.defaultRole || 'viewer');
                             const hasPendingRequest = client.dashboardPendingRequests?.[layout.id];
+                            const isEditorTarget = dashboardRole === 'editor' || client.role === 'editor';
+                            const disableRoleEdit = isLocalServer || (role === 'moderator' && isEditorTarget);
+                            const roleEditTitle = isLocalServer
+                              ? 'Local server role is fixed.'
+                              : (role === 'moderator' && isEditorTarget ? 'Moderators cannot edit editor roles.' : undefined);
                             const roleColors = {
                               editor: { bg: '#2a4a2a', color: '#4ae24a', label: 'E' },
                               moderator: { bg: '#4a2a4a', color: '#e24ae2', label: 'M' },
@@ -2087,6 +2114,8 @@ const SettingsPage = () => {
                                   // Show role selector
                                   <select
                                   value={dashboardRole}
+                                  disabled={disableRoleEdit}
+                                  title={roleEditTitle}
                                   onChange={(e) => {
                                     const newRole = e.target.value;
 
@@ -2126,7 +2155,8 @@ const SettingsPage = () => {
                                     color: roleStyle.color,
                                     border: `1px solid ${roleStyle.color}`,
                                     borderRadius: '4px',
-                                    cursor: 'pointer',
+                                    cursor: disableRoleEdit ? 'not-allowed' : 'pointer',
+                                    opacity: disableRoleEdit ? 0.5 : 1,
                                     width: '100%'
                                   }}
                                 >
@@ -2142,6 +2172,14 @@ const SettingsPage = () => {
                           <td style={{ padding: '8px', textAlign: 'center' }}>
                             <button
                               onClick={() => {
+                                if (isLocalServer) {
+                                  alert('The local server client cannot be removed.');
+                                  return;
+                                }
+                                if (role === 'moderator' && clientIsEditor) {
+                                  alert('Moderators cannot remove editor clients.');
+                                  return;
+                                }
                                 if (window.confirm(`Are you sure you want to remove client "${client.nickname || shortId}"? This will delete them from all dashboards.`)) {
                                   fetch(`/api/clients/${client.id}`, {
                                     method: 'DELETE'
@@ -2158,9 +2196,11 @@ const SettingsPage = () => {
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: '4px',
-                                cursor: 'pointer',
-                                fontWeight: '600'
+                                cursor: isLocalServer || (role === 'moderator' && clientIsEditor) ? 'not-allowed' : 'pointer',
+                                fontWeight: '600',
+                                opacity: isLocalServer || (role === 'moderator' && clientIsEditor) ? 0.5 : 1
                               }}
+                              disabled={isLocalServer || (role === 'moderator' && clientIsEditor)}
                             >
                               Remove
                             </button>
@@ -2324,6 +2364,7 @@ const SettingsPage = () => {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {config.clients.map((client) => {
                       const isActive = activeClients.some(ac => ac.id === client.id);
+                      const isLocalServer = client.nickname === 'Server';
                       const shortId = client.id.substring(0, 6).toUpperCase();
 
                       return (
@@ -2462,6 +2503,11 @@ const SettingsPage = () => {
                             {!client.pendingRequest && (
                               <select
                                 value={client.role}
+                                title={
+                                  isLocalServer
+                                    ? 'Local server role is fixed.'
+                                    : (role === 'moderator' && client.role === 'editor' ? 'Moderators cannot edit editor roles.' : undefined)
+                                }
                                 onChange={(e) => {
                                   fetch(`/api/clients/${client.id}/role`, {
                                     method: 'POST',
@@ -2473,7 +2519,7 @@ const SettingsPage = () => {
                                       fetchConfig();
                                     });
                                 }}
-                                disabled={role === 'moderator' && (client.role === 'moderator' || client.role === 'editor')}
+                                disabled={isLocalServer || (role === 'moderator' && client.role === 'editor')}
                                 style={{
                                   padding: '6px 8px',
                                   fontSize: '12px',
@@ -2481,8 +2527,8 @@ const SettingsPage = () => {
                                   border: '1px solid #333',
                                   borderRadius: '4px',
                                   color: '#f0f0f0',
-                                  opacity: role === 'moderator' && (client.role === 'moderator' || client.role === 'editor') ? 0.5 : 1,
-                                  cursor: role === 'moderator' && (client.role === 'moderator' || client.role === 'editor') ? 'not-allowed' : 'pointer'
+                                  opacity: isLocalServer || (role === 'moderator' && client.role === 'editor') ? 0.5 : 1,
+                                  cursor: isLocalServer || (role === 'moderator' && client.role === 'editor') ? 'not-allowed' : 'pointer'
                                 }}
                               >
                                 <option value="viewer">Viewer</option>
@@ -2495,6 +2541,14 @@ const SettingsPage = () => {
                             <button
                               className="btn btn-danger btn-small"
                               onClick={() => {
+                                if (isLocalServer) {
+                                  alert('The local server client cannot be removed.');
+                                  return;
+                                }
+                                if (role === 'moderator' && client.role === 'editor') {
+                                  alert('Moderators cannot remove editor clients.');
+                                  return;
+                                }
                                 if (window.confirm(`Remove client ${shortId}?`)) {
                                   fetch(`/api/clients/${client.id}`, {
                                     method: 'DELETE'
@@ -2506,6 +2560,7 @@ const SettingsPage = () => {
                                 }
                               }}
                               style={{ padding: '6px 8px', fontSize: '12px' }}
+                              disabled={isLocalServer || (role === 'moderator' && client.role === 'editor')}
                               title="Remove Client"
                             >
                               ×
@@ -4094,7 +4149,16 @@ const SettingsPage = () => {
                           const shortId = client.id.substring(0, 6).toUpperCase();
                           const isActive = activeClients.some(ac => ac.id === client.id);
                           // Use explicit dashboard role if set, otherwise use dashboard's default role
-                          const dashboardRole = client.dashboardAccess?.[layout.id] || layout.accessControl?.defaultRole || 'viewer';
+                          const isLocalServer = client.lastIp === '127.0.0.1' ||
+                            client.lastIp === '::1' ||
+                            client.lastIp === '::ffff:127.0.0.1' ||
+                            client.nickname === 'Server';
+                          const dashboardRole = client.dashboardAccess?.[layout.id] ||
+                            (client.role === 'editor' ? 'editor' : layout.accessControl?.defaultRole || 'viewer');
+                          const disableRoleEdit = isLocalServer || (role === 'moderator' && (dashboardRole === 'editor' || client.role === 'editor'));
+                          const roleEditTitle = isLocalServer
+                            ? 'Local server role is fixed.'
+                            : (role === 'moderator' && (dashboardRole === 'editor' || client.role === 'editor') ? 'Moderators cannot edit editor roles.' : undefined);
 
                           return (
                             <div
@@ -4182,6 +4246,8 @@ const SettingsPage = () => {
                                 // Show role selector if no pending request
                                 <select
                                   value={dashboardRole}
+                                  disabled={disableRoleEdit}
+                                  title={roleEditTitle}
                                   onChange={(e) => {
                                     const newRole = e.target.value;
 
@@ -4220,7 +4286,8 @@ const SettingsPage = () => {
                                     border: '1px solid #333',
                                     borderRadius: '3px',
                                     color: '#f0f0f0',
-                                    cursor: 'pointer'
+                                    cursor: disableRoleEdit ? 'not-allowed' : 'pointer',
+                                    opacity: disableRoleEdit ? 0.5 : 1
                                   }}
                                 >
                                   <option value="viewer">Viewer</option>
@@ -4633,7 +4700,16 @@ const SettingsPage = () => {
         </div>{/* End Tab Content */}
       </div>{/* End Main Layout */}
 
-      <ConnectedUsers activeClients={activeClients} show={true} />
+      <ConnectedUsers
+        activeClients={activeClients}
+        show={true}
+        dashboardId={selectedDashboard !== 'global'
+          ? selectedDashboard
+          : (lastDashboardSelection || config?.showLayouts?.[0]?.id || null)}
+        defaultRole={(selectedDashboard !== 'global'
+          ? config?.showLayouts?.find(layout => layout.id === selectedDashboard)?.accessControl?.defaultRole
+          : config?.showLayouts?.find(layout => layout.id === lastDashboardSelection)?.accessControl?.defaultRole) || null}
+      />
     </div>
   );
 };

@@ -12,7 +12,8 @@
     "install-all": "npm install && cd client && npm install",
     "electron": "electron .",
     "electron:dev": "concurrently \"cross-env BROWSER=none npm run dev\" \"cross-env ELECTRON_START_URL=http://127.0.0.1:3001 electron .\"",
-    "electron:build": "npm run build && electron-builder"
+    "electron:build": "npm run build && electron-builder",
+    "electron:build:all": "npm run build && electron-builder -mwl --x64 --arm64"
   },
   "keywords": [
     "dmx",
@@ -41,6 +42,7 @@
   "build": {
     "appId": "com.dmxdashboard",
     "productName": "DMX Dashboard",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "electron/**",
       "server/**",
@@ -49,6 +51,7 @@
     ],
     "mac": {
       "icon": "assets/icons/icon.png",
+      "artifactName": "${productName}-${version}-Mac-${arch}.${ext}",
       "target": [
         {
           "target": "dmg",
@@ -61,12 +64,14 @@
     },
     "win": {
       "icon": "assets/icons/icon.ico",
+      "artifactName": "${productName}-${version}-Win-${arch}.${ext}",
       "target": [
         "nsis"
       ]
     },
     "linux": {
       "icon": "assets/icons/icon.png",
+      "artifactName": "${productName}-${version}-Linux-${arch}.${ext}",
       "target": [
         "AppImage"
       ]

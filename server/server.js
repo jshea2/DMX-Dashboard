@@ -80,6 +80,7 @@ app.post('/api/config', (req, res) => {
     state.reinitialize();
     dmxEngine.initializeUniverses();
     outputEngine.restart();
+    broadcastConfigUpdated();
     res.json({ success: true, config: config.get() });
   } else {
     res.status(500).json({ success: false, error: 'Failed to save config' });
@@ -90,6 +91,7 @@ app.post('/api/config', (req, res) => {
 app.post('/api/config/reset', (req, res) => {
   config.reset();
   outputEngine.restart();
+  broadcastConfigUpdated();
   res.json({ success: true, config: config.get() });
 });
 
@@ -100,6 +102,7 @@ app.post('/api/config/active-layout', (req, res) => {
   currentConfig.activeLayoutId = activeLayoutId;
   const success = config.update(currentConfig);
   if (success) {
+    broadcastConfigUpdated();
     res.json({ success: true, activeLayoutId });
   } else {
     res.status(500).json({ success: false, error: 'Failed to update active layout' });
@@ -119,6 +122,7 @@ app.post('/api/config/import', (req, res) => {
     const success = config.importConfig(JSON.stringify(req.body));
     if (success) {
       outputEngine.restart();
+      broadcastConfigUpdated();
       res.json({ success: true, config: config.get() });
     } else {
       res.status(500).json({ success: false, error: 'Failed to import config' });
@@ -365,6 +369,7 @@ app.post('/api/dashboards/:dashboardId/access-settings', (req, res) => {
 
   const success = config.update(cfg);
   if (success) {
+    broadcastConfigUpdated();
     res.json({ success: true, accessControl: layout.accessControl });
   } else {
     res.status(500).json({ success: false, error: 'Failed to update access settings' });
@@ -404,6 +409,7 @@ app.post('/api/dashboards/:dashboardId/settings', (req, res) => {
 
   const success = config.update(cfg);
   if (success) {
+    broadcastConfigUpdated();
     res.json({ success: true, layout });
   } else {
     res.status(500).json({ success: false, error: 'Failed to update dashboard settings' });
@@ -431,6 +437,7 @@ app.post('/api/looks/:lookId/capture', (req, res) => {
   }
 
   config.update(cfg);
+  broadcastConfigUpdated();
   res.json({ success: true, look });
 });
 
@@ -512,8 +519,9 @@ wss.on('connection', (ws, req) => {
 
       // State update - check permissions
       if (msg.type === 'update') {
+        const dashboardId = msg.dashboardId;
         // Check if client has permission to edit
-        if (!clientId || !clientManager.hasPermission(clientId, 'edit')) {
+        if (!clientId || !clientManager.hasPermission(clientId, 'edit', dashboardId)) {
           ws.send(JSON.stringify({
             type: 'permissionDenied',
             message: 'You do not have permission to edit. Request access from the host.'
@@ -553,6 +561,7 @@ wss.on('connection', (ws, req) => {
 function broadcastActiveClients() {
   const activeClients = clientManager.getActiveClients();
   const currentConfig = config.get();
+  let didUpdateConfig = false;
 
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
@@ -560,41 +569,92 @@ function broadcastActiveClients() {
         type: 'activeClients',
         clients: activeClients.map(id => {
           const clientData = currentConfig.clients.find(c => c.id === id);
+          const activeConnection = clientManager.getActive(id);
+          const activeIp = activeConnection?.ip;
+          const isLocalhost = activeIp === '127.0.0.1' ||
+            activeIp === '::1' ||
+            activeIp === '::ffff:127.0.0.1' ||
+            clientData?.nickname === 'Server';
+          if (isLocalhost && clientData && clientData.role !== 'editor') {
+            clientData.role = 'editor';
+            didUpdateConfig = true;
+          }
           return {
             id,
             shortId: id.substring(0, 6).toUpperCase(),
-            role: clientData?.role || 'viewer',
-            nickname: clientData?.nickname || ''
+            role: isLocalhost ? 'editor' : (clientData?.role || 'viewer'),
+            nickname: clientData?.nickname || '',
+            dashboardAccess: clientData?.dashboardAccess || {}
           };
         }),
         showConnectedUsers: currentConfig.webServer?.showConnectedUsers !== false
       }));
     }
   });
+
+  if (didUpdateConfig) {
+    config.update(currentConfig);
+    broadcastConfigUpdated();
+  }
 }
 
-// Listen for state changes and broadcast to all WebSocket clients
-state.addListener((newState) => {
+function broadcastConfigUpdated() {
+  const version = Date.now();
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({
+        type: 'configUpdated',
+        version
+      }));
+    }
+  });
+}
+
+const broadcastState = (currentState) => {
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(JSON.stringify({
         type: 'state',
-        data: newState
+        data: currentState
       }));
     }
   });
+};
+
+// Listen for state changes and broadcast to all WebSocket clients
+state.addListener((newState) => {
+  broadcastState(newState);
 });
+
+// Periodic state sync to prevent missed updates on slower clients
+setInterval(() => {
+  if (wss.clients.size === 0) return;
+  broadcastState(state.get());
+}, 1000);
+
+// Periodic active clients sync to prevent stale role/status in UI
+setInterval(() => {
+  if (wss.clients.size === 0) return;
+  broadcastActiveClients();
+}, 3000);
 
 // Run migrations before starting
 console.log('[Server] Running migrations...');
 const fs = require('fs');
-const configPath = path.join(__dirname, 'config.json');
+const configPath = process.env.DMX_CONFIG_PATH || path.join(__dirname, 'config.json');
+const ensureConfigDir = () => {
+  const dir = path.dirname(configPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+};
 
 // Create backup before migration
 const cfg = config.get();
 if (!cfg.migrationVersion || cfg.migrationVersion < 1) {
   console.log('[Server] Creating backup before migration...');
-  const backupPath = path.join(__dirname, 'config.backup.json');
+  ensureConfigDir();
+  const backupPath = `${configPath}.backup`;
   fs.writeFileSync(backupPath, JSON.stringify(cfg, null, 2));
   console.log(`[Server] Backup created at ${backupPath}`);
 

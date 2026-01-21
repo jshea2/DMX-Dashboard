@@ -113,6 +113,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'look1',
       name: 'Warm Dramatic',
+      showRecordButton: true,
       color: 'orange',
       tags: [],
       targets: {
@@ -125,6 +126,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'look2',
       name: 'Cool Dramatic',
+      showRecordButton: true,
       color: 'cyan',
       tags: [],
       targets: {
@@ -137,6 +139,7 @@ const DEFAULT_CONFIG = {
     {
       id: 'look3',
       name: 'Vibrant',
+      showRecordButton: true,
       color: 'purple',
       tags: [],
       targets: {
