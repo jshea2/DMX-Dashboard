@@ -1423,23 +1423,60 @@ const SettingsPage = () => {
   // === LOOK FUNCTIONS ===
   const addLook = () => {
     const newConfig = { ...config };
+    if (!Array.isArray(newConfig.looks)) {
+      newConfig.looks = [];
+    }
     const newId = `look-${Date.now()}`;
     const targets = {};
     // Initialize targets for all fixtures
-    newConfig.fixtures.forEach(fixture => {
+    (newConfig.fixtures || []).forEach(fixture => {
       const profile = newConfig.fixtureProfiles?.find(p => p.id === fixture.profileId);
-      if (profile) {
-        const isRgb = profile.channels?.some(ch => ch.name === 'red') &&
-                      profile.channels?.some(ch => ch.name === 'green') &&
-                      profile.channels?.some(ch => ch.name === 'blue');
-        if (isRgb) {
-          targets[fixture.id] = { hue: 0, brightness: 0 };
-        } else {
-          targets[fixture.id] = {};
-          profile.channels.forEach(ch => {
-            targets[fixture.id][ch.name] = 0;
-          });
+      if (!profile) return;
+
+      let isRgb = false;
+      const channelNames = [];
+
+      if (Array.isArray(profile.controls)) {
+        profile.controls.forEach(control => {
+          if (!control) return;
+          if (control.controlType === 'RGB' || control.controlType === 'RGBW') {
+            isRgb = true;
+          }
+          if (Array.isArray(control.components)) {
+            const hasRed = control.components.some(comp => comp?.name === 'red');
+            const hasGreen = control.components.some(comp => comp?.name === 'green');
+            const hasBlue = control.components.some(comp => comp?.name === 'blue');
+            if (hasRed && hasGreen && hasBlue) {
+              isRgb = true;
+            }
+            control.components.forEach(comp => {
+              if (comp?.name) {
+                channelNames.push(comp.name);
+              }
+            });
+          }
+        });
+      } else if (Array.isArray(profile.channels)) {
+        const hasRed = profile.channels.some(ch => ch?.name === 'red');
+        const hasGreen = profile.channels.some(ch => ch?.name === 'green');
+        const hasBlue = profile.channels.some(ch => ch?.name === 'blue');
+        if (hasRed && hasGreen && hasBlue) {
+          isRgb = true;
         }
+        profile.channels.forEach(ch => {
+          if (ch?.name) {
+            channelNames.push(ch.name);
+          }
+        });
+      }
+
+      if (isRgb) {
+        targets[fixture.id] = { hue: 0, brightness: 0 };
+      } else {
+        targets[fixture.id] = {};
+        channelNames.forEach(name => {
+          if (name) targets[fixture.id][name] = 0;
+        });
       }
     });
     newConfig.looks.push({
@@ -2038,7 +2075,7 @@ const SettingsPage = () => {
                           </td>
                           {config.showLayouts.map((layout) => {
                             const dashboardRole = client.dashboardAccess?.[layout.id] ||
-                              (client.role === 'editor' ? 'editor' : layout.accessControl?.defaultRole || 'viewer');
+                              (client.role === 'editor' ? 'editor' : (client.role !== 'viewer' ? client.role : (layout.accessControl?.defaultRole || 'viewer')));
                             const hasPendingRequest = client.dashboardPendingRequests?.[layout.id];
                             const isEditorTarget = dashboardRole === 'editor' || client.role === 'editor';
                             const disableRoleEdit = isLocalServer || (role === 'moderator' && isEditorTarget);
@@ -2364,8 +2401,20 @@ const SettingsPage = () => {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                     {config.clients.map((client) => {
                       const isActive = activeClients.some(ac => ac.id === client.id);
-                      const isLocalServer = client.nickname === 'Server';
+                      const isLocalServer = client.nickname === 'Server' ||
+                        client.lastIp === '127.0.0.1' ||
+                        client.lastIp === '::1' ||
+                        client.lastIp === '::ffff:127.0.0.1';
                       const shortId = client.id.substring(0, 6).toUpperCase();
+                      const selectedLayout = selectedDashboard !== 'global'
+                        ? config.showLayouts?.find(layout => layout.id === selectedDashboard)
+                        : null;
+                      const dashboardRole = selectedLayout && client.dashboardAccess?.[selectedLayout.id];
+                      const displayRole = isLocalServer
+                        ? 'editor'
+                        : (dashboardRole ||
+                          (client.role === 'editor' ? 'editor' :
+                            (client.role !== 'viewer' ? client.role : (selectedLayout?.accessControl?.defaultRole || 'viewer'))));
 
                       return (
                         <div
@@ -2408,11 +2457,11 @@ const SettingsPage = () => {
                                   fontSize: '11px',
                                   padding: '2px 6px',
                                   borderRadius: '3px',
-                                  background: client.role === 'editor' ? '#2a4a2a' : client.role === 'controller' ? '#4a3a2a' : '#2a2a4a',
-                                  color: client.role === 'editor' ? '#4ae24a' : client.role === 'controller' ? '#e2904a' : '#4a90e2'
+                                  background: displayRole === 'editor' ? '#2a4a2a' : displayRole === 'controller' ? '#4a3a2a' : displayRole === 'moderator' ? '#4a2a4a' : '#2a2a4a',
+                                  color: displayRole === 'editor' ? '#4ae24a' : displayRole === 'controller' ? '#e2904a' : displayRole === 'moderator' ? '#e24ae2' : '#4a90e2'
                                 }}
                               >
-                                {client.role.toUpperCase()}
+                                {displayRole.toUpperCase()}
                               </span>
                             </div>
                             <div style={{ fontSize: '11px', color: '#666' }}>
@@ -2502,7 +2551,7 @@ const SettingsPage = () => {
 
                             {!client.pendingRequest && (
                               <select
-                                value={client.role}
+                                value={displayRole}
                                 title={
                                   isLocalServer
                                     ? 'Local server role is fixed.'
@@ -4154,7 +4203,7 @@ const SettingsPage = () => {
                             client.lastIp === '::ffff:127.0.0.1' ||
                             client.nickname === 'Server';
                           const dashboardRole = client.dashboardAccess?.[layout.id] ||
-                            (client.role === 'editor' ? 'editor' : layout.accessControl?.defaultRole || 'viewer');
+                            (client.role === 'editor' ? 'editor' : (client.role !== 'viewer' ? client.role : (layout.accessControl?.defaultRole || 'viewer')));
                           const disableRoleEdit = isLocalServer || (role === 'moderator' && (dashboardRole === 'editor' || client.role === 'editor'));
                           const roleEditTitle = isLocalServer
                             ? 'Local server role is fixed.'
