@@ -1,15 +1,30 @@
-const { app, BrowserWindow, shell } = require('electron');
+const { app, BrowserWindow, shell, dialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const dns = require('dns').promises;
 const { fork } = require('child_process');
 
 const DEFAULT_PORT = 3000;
 const isDev = !app.isPackaged;
+const RELEASES_URL = 'https://github.com/jshea2/DMX-Dashboard/releases';
 
 let serverProcess = null;
 let serverLogPath = null;
 let serverLogStream = null;
+let updaterLogPath = null;
+
+const logUpdater = (message) => {
+  try {
+    if (!updaterLogPath) {
+      updaterLogPath = path.join(app.getPath('userData'), 'updater.log');
+    }
+    fs.appendFileSync(updaterLogPath, `[${new Date().toISOString()}] ${message}\n`);
+  } catch (err) {
+    // Ignore logging failures.
+  }
+};
 
 app.setName('DMX Dashboard');
 
@@ -34,6 +49,25 @@ const readServerPort = () => {
     // Ignore missing/invalid config - fall back to default port.
   }
   return DEFAULT_PORT;
+};
+
+const getAutoUpdateEnabled = () => {
+  try {
+    const raw = fs.readFileSync(getConfigPath(), 'utf8');
+    const cfg = JSON.parse(raw);
+    if (typeof cfg?.webServer?.autoUpdateCheck === 'boolean') {
+      return cfg.webServer.autoUpdateCheck;
+    }
+  } catch (err) {
+    // Ignore missing/invalid config - fall back to enabled.
+  }
+  return true;
+};
+
+const hasInternet = async (timeoutMs = 2000) => {
+  const timeout = new Promise((resolve) => setTimeout(() => resolve(false), timeoutMs));
+  const lookup = dns.lookup('github.com').then(() => true).catch(() => false);
+  return Promise.race([lookup, timeout]);
 };
 
 const waitForServer = (port, retries = 60, delayMs = 250) => {
@@ -173,7 +207,87 @@ const createWindow = async () => {
   });
 };
 
-app.whenReady().then(createWindow);
+const setupAutoUpdater = () => {
+  if (isDev) return;
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  autoUpdater.on('update-available', async (info) => {
+    logUpdater(`Update available: ${JSON.stringify({ version: info?.version, files: info?.files?.map(f => f?.url) })}`);
+    const currentVersion = app.getVersion();
+    const result = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Update available',
+      message: `DMX Dashboard ${info.version} is available`,
+      detail: `Current version: ${currentVersion}\nNew version: ${info.version}\n\nWould you like to download and install now?`,
+      buttons: ['Download and Install', 'View Releases', 'Later'],
+      defaultId: 0,
+      cancelId: 2
+    });
+
+    if (result.response === 1) {
+      shell.openExternal(RELEASES_URL);
+      return;
+    }
+
+    if (result.response === 0) {
+      try {
+        await autoUpdater.downloadUpdate();
+      } catch (err) {
+        console.warn('[Updater] Download failed:', err);
+        logUpdater(`Download failed: ${err?.message || err}`);
+        dialog.showMessageBox({
+          type: 'error',
+          title: 'Update failed',
+          message: 'Failed to download the update.',
+          detail: `Please check your internet connection or download manually from the releases page.\n\nLog: ${updaterLogPath || path.join(app.getPath('userData'), 'updater.log')}`,
+          buttons: ['OK', 'Open Releases'],
+          defaultId: 0,
+          cancelId: 0
+        }).then(({ response }) => {
+          if (response === 1) {
+            shell.openExternal(RELEASES_URL);
+          }
+        });
+      }
+    }
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    logUpdater('Update downloaded. Quitting to install.');
+    autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.warn('[Updater] Error:', err?.message || err);
+    logUpdater(`Updater error: ${err?.message || err}`);
+  });
+};
+
+const checkForUpdatesOnLaunch = async () => {
+  if (isDev) return;
+  if (!getAutoUpdateEnabled()) return;
+  const online = await hasInternet();
+  if (!online) {
+    console.log('[Updater] Offline - skipping update check.');
+    logUpdater('Offline - skipping update check.');
+    return;
+  }
+  try {
+    logUpdater('Checking for updates...');
+    await autoUpdater.checkForUpdates();
+  } catch (err) {
+    console.warn('[Updater] Update check failed:', err?.message || err);
+    logUpdater(`Update check failed: ${err?.message || err}`);
+  }
+};
+
+app.whenReady().then(async () => {
+  await createWindow();
+  setupAutoUpdater();
+  checkForUpdatesOnLaunch();
+});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {

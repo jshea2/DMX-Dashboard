@@ -66,7 +66,8 @@ const DEFAULT_CONFIG = {
     passcode: '',
     passcodeEnabled: false,
     showConnectedUsers: true, // Show bottom-left connected users indicator
-    defaultClientRole: 'viewer' // Default role for new clients: 'viewer', 'controller', or 'editor'
+    defaultClientRole: 'viewer', // Default role for new clients: 'viewer', 'controller', or 'editor'
+    autoUpdateCheck: true // Check for app updates on launch (Electron)
   },
   clients: [],
   fixtures: [
@@ -172,6 +173,10 @@ class Config {
         config = this.ensureLayoutAccessControl(config);
         // Migrate tags for fixtures and looks
         config = this.ensureTags(config);
+        // Ensure update settings
+        config = this.ensureUpdateSettings(config);
+        // Normalize control block defaults
+        config = this.ensureControlBlockDefaults(config);
         return config;
       }
     } catch (error) {
@@ -181,6 +186,8 @@ class Config {
     config = this.ensureShowLayouts(config);
     config = this.ensureLayoutAccessControl(config);
     config = this.ensureTags(config);
+    config = this.ensureUpdateSettings(config);
+    config = this.ensureControlBlockDefaults(config);
     return config;
   }
 
@@ -324,6 +331,65 @@ class Config {
     if (!config.activeLayoutId && config.showLayouts.length > 0) {
       config.activeLayoutId = config.showLayouts[0].id;
     }
+
+    return config;
+  }
+
+  ensureUpdateSettings(config) {
+    if (!config.webServer) {
+      config.webServer = {};
+    }
+    if (typeof config.webServer.autoUpdateCheck !== 'boolean') {
+      config.webServer.autoUpdateCheck = true;
+    }
+    return config;
+  }
+
+  ensureControlBlockDefaults(config) {
+    if (!Array.isArray(config.fixtureProfiles)) return config;
+
+    config.fixtureProfiles.forEach(profile => {
+      if (!Array.isArray(profile.controls)) return;
+      profile.controls.forEach(control => {
+        if (!control || !control.controlType) return;
+        const isRgb = control.controlType === 'RGB';
+        const isRgbw = control.controlType === 'RGBW';
+        if (!isRgb && !isRgbw) return;
+        const isStrictDimmerColor = Boolean(control.brightnessDrivenByIntensity);
+
+        const defaultValue = control.defaultValue || {};
+        const type = defaultValue.type || (isRgbw ? 'rgbw' : 'rgb');
+        const r = Number(defaultValue.r);
+        const g = Number(defaultValue.g);
+        const b = Number(defaultValue.b);
+        const w = Number(defaultValue.w);
+
+        const isBlackDefault = isRgbw
+          ? r === 0 && g === 0 && b === 0 && w === 0
+          : r === 0 && g === 0 && b === 0;
+
+        const isWhiteDefault = isRgbw
+          ? r === 1 && g === 1 && b === 1 && w === 1
+          : r === 1 && g === 1 && b === 1;
+
+        // Strict Dimmer+RGB profiles should default to white so dimmer-only bring-up works.
+        if (isStrictDimmerColor) {
+          if (!control.defaultValue || isBlackDefault) {
+            control.defaultValue = isRgbw
+              ? { type, r: 1.0, g: 1.0, b: 1.0, w: 1.0 }
+              : { type, r: 1.0, g: 1.0, b: 1.0 };
+          }
+          return;
+        }
+
+        // Non-strict RGB/RGBW defaults should be black.
+        if (!control.defaultValue || isWhiteDefault) {
+          control.defaultValue = isRgbw
+            ? { type, r: 0.0, g: 0.0, b: 0.0, w: 0.0 }
+            : { type, r: 0.0, g: 0.0, b: 0.0 };
+        }
+      });
+    });
 
     return config;
   }

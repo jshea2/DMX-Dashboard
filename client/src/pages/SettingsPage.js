@@ -595,6 +595,12 @@ const SettingsPage = () => {
 
   // Preset channel types
   const CHANNEL_TYPES = {
+    DimmerRGB: [
+      { name: 'intensity', label: 'Intensity' },
+      { name: 'red', label: 'Red' },
+      { name: 'green', label: 'Green' },
+      { name: 'blue', label: 'Blue' }
+    ],
     RGB: [
       { name: 'red', label: 'Red' },
       { name: 'green', label: 'Green' },
@@ -764,6 +770,34 @@ const SettingsPage = () => {
         { type: 'tint', name: 'tint', offset: 0 }
       ],
       defaultValue: { type: 'scalar', v: 127 / 255 }
+    },
+    'DimmerRGB': {
+      label: 'Dimmer + RGB (4ch)',
+      controls: [
+        {
+          label: 'Dimmer',
+          domain: 'Intensity',
+          controlType: 'Intensity',
+          channelCount: 1,
+          components: [
+            { type: 'intensity', name: 'intensity', offset: 0 }
+          ],
+          defaultValue: { type: 'scalar', v: 0.0 }
+        },
+        {
+          label: 'RGB Color',
+          domain: 'Color',
+          controlType: 'RGB',
+          brightnessDrivenByIntensity: true,
+          channelCount: 3,
+          components: [
+            { type: 'red', name: 'red', offset: 0 },
+            { type: 'green', name: 'green', offset: 1 },
+            { type: 'blue', name: 'blue', offset: 2 }
+          ],
+          defaultValue: { type: 'rgb', r: 1.0, g: 1.0, b: 1.0 }
+        }
+      ]
     }
   };
 
@@ -788,6 +822,31 @@ const SettingsPage = () => {
 
     // Calculate offset based on existing controls
     const currentTotalChannels = profile.controls.reduce((sum, c) => sum + (c.channelCount || 0), 0);
+
+    // Composite templates add multiple controls in one action
+    if (Array.isArray(template.controls)) {
+      let runningOffset = currentTotalChannels;
+      template.controls.forEach(subTemplate => {
+        const newControl = {
+          id: uuidv4(),
+          label: subTemplate.label,
+          domain: subTemplate.domain,
+          controlType: subTemplate.controlType,
+          ...(subTemplate.brightnessDrivenByIntensity ? { brightnessDrivenByIntensity: true } : {}),
+          channelCount: subTemplate.channelCount,
+          components: subTemplate.components.map(comp => ({
+            ...comp,
+            offset: runningOffset + comp.offset
+          })),
+          defaultValue: subTemplate.defaultValue ? { ...subTemplate.defaultValue } : null
+        };
+        profile.controls.push(newControl);
+        runningOffset += subTemplate.channelCount || 0;
+      });
+      setConfig(newConfig);
+      setHasUnsavedChanges(true);
+      return;
+    }
 
     // Create new control with updated offsets
     const newControl = {
@@ -1128,11 +1187,15 @@ const SettingsPage = () => {
     const exists = section.items.some(item => item.type === type && item.id === id);
     if (exists) return;
 
-    section.items.push({
+    const newItem = {
       type: type,
       id: id,
       order: section.items.length
-    });
+    };
+    if (type === 'look') {
+      newItem.lookUiMode = 'slider';
+    }
+    section.items.push(newItem);
     setConfig(newConfig);
   };
 
@@ -1410,8 +1473,9 @@ const SettingsPage = () => {
   };
 
   const getQRCodeURL = (interfaceAddress, dashboardSlug = null) => {
-    const port = window.location.port || 3000;
-    let url = `http://${interfaceAddress}:${port}`;
+    const configuredPort = Number(config?.server?.port || window.location.port || 3000);
+    const includePort = configuredPort !== 80 && configuredPort !== 443;
+    let url = `http://${interfaceAddress}${includePort ? `:${configuredPort}` : ''}`;
 
     if (dashboardSlug) {
       url += `/dashboard/${dashboardSlug}`;
@@ -1856,7 +1920,7 @@ const SettingsPage = () => {
               )}
 
               <div className="form-group">
-                <label>Bind to Network Interface</label>
+                <label>Bind to Network Interfacee</label>
                 <select
                   value={config.network.sacn.bindAddress || ''}
                   onChange={(e) => updateConfig('network.sacn.bindAddress', e.target.value)}
@@ -1913,6 +1977,20 @@ const SettingsPage = () => {
               onChange={(e) => updateConfig('network.outputFps', parseInt(e.target.value))}
             />
             <small>Recommended: 30-40</small>
+          </div>
+
+          <div style={{ marginTop: '20px' }}>
+            <h4 style={{ marginBottom: '8px', fontSize: '15px', color: '#4a90e2' }}>Updates</h4>
+            <div className="form-group checkbox-group">
+              <input
+                type="checkbox"
+                id="autoUpdateCheck"
+                checked={config.webServer?.autoUpdateCheck !== false}
+                onChange={(e) => updateConfig('webServer.autoUpdateCheck', e.target.checked)}
+              />
+              <label htmlFor="autoUpdateCheck">Auto check for updates on launch</label>
+            </div>
+            <small>If there’s no internet connection, the app will skip the update check.</small>
           </div>
             </>
           )}
@@ -2276,7 +2354,7 @@ const SettingsPage = () => {
               disabled={role === 'moderator'}
               style={{ opacity: role === 'moderator' ? 0.6 : 1, cursor: role === 'moderator' ? 'not-allowed' : 'text' }}
             />
-            <small>Default: 3001 (restart required after change)</small>
+            <small>Set to 80 for no-port URL (restart required)</small>
           </div>
 
           <div className="form-group">
@@ -2897,6 +2975,7 @@ const SettingsPage = () => {
                       }}
                     >
                       <option value="">+ Add Control</option>
+                      <option value="DimmerRGB">Dimmer + RGB (4ch)</option>
                       <option value="Intensity">Intensity (1ch)</option>
                       <option value="RGB">RGB (3ch)</option>
                       <option value="RGBW">RGBW (4ch)</option>
@@ -3065,6 +3144,7 @@ const SettingsPage = () => {
                   }}
                 >
                   <option value="">+ Add Type</option>
+                  <option value="DimmerRGB">Dimmer + RGB (4 ch)</option>
                   <option value="RGB">RGB (3 ch)</option>
                   <option value="RGBW">RGBW (4 ch)</option>
                   <option value="Intensity">Intensity (1 ch)</option>
@@ -4553,10 +4633,11 @@ const SettingsPage = () => {
                                       <span style={{ flex: 1, color: '#e0e0e0', fontSize: '12px' }}>
                                         {itemName}
                                       </span>
-                                      {item.type === 'fixture' && (
+                                      {/* UI mode dropdown for look items */}
+                                      {item.type === 'look' && (
                                         <select
-                                          value={item.controlMode || 'toggle'}
-                                          onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'controlMode', e.target.value)}
+                                          value={item.lookUiMode || 'slider'}
+                                          onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'lookUiMode', e.target.value)}
                                           style={{
                                             padding: '4px 6px',
                                             fontSize: '11px',
@@ -4566,13 +4647,13 @@ const SettingsPage = () => {
                                             borderRadius: '4px',
                                             marginLeft: '8px'
                                           }}
-                                          title="Fixture Control"
+                                          title="Look UI Mode"
                                         >
-                                          <option value="toggle">Toggle</option>
                                           <option value="slider">Slider</option>
+                                          <option value="toggle">Toggle</option>
+                                          <option value="radio">Radio</option>
                                         </select>
                                       )}
-
                                       {/* Display Mode dropdown for RGB fixtures */}
                                       {item.type === 'fixture' && (() => {
                                         const fixture = config.fixtures.find(f => f.id === item.id);
@@ -4731,6 +4812,32 @@ const SettingsPage = () => {
                   />
                 </label>
               </div>
+            </div>
+
+            <div style={{ marginTop: '24px' }}>
+              <h4 style={{ marginBottom: '12px' }}>Reset to Defaults</h4>
+              <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '12px' }}>
+                This will restore the app to its default settings and reload the page.
+              </p>
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  if (window.confirm('Reset all settings to defaults? This cannot be undone.')) {
+                    fetch('/api/config/reset', { method: 'POST' })
+                      .then(res => res.json())
+                      .then(() => {
+                        alert('Settings reset to defaults.');
+                        window.location.reload();
+                      })
+                      .catch(err => {
+                        console.error('Failed to reset config:', err);
+                        alert('Reset failed. Please try again.');
+                      });
+                  }
+                }}
+              >
+                ♻️ Reset to Defaults
+              </button>
             </div>
 
             <div style={{ marginTop: '32px', padding: '16px', background: '#1a2a3a', borderRadius: '8px', borderLeft: '4px solid #4a90e2' }}>

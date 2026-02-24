@@ -6,7 +6,7 @@
 
 ## Download
 
-- [Download DMX Dashboard](../../releases)
+- [Download DMX Dashboard](https://github.com/jshea2/DMX-Dashboard/releases/latest)
 
 <img width="306" height="506" alt="Screenshot 2026-01-19 at 11 37 48 PM" src="https://github.com/user-attachments/assets/35d572d0-08ff-414f-aa4e-4f373c1f116a" />
 
@@ -93,6 +93,29 @@ Access options:
 ```
 npm install
 npm run electron:build
+```
+
+## Releases
+
+- Latest download: https://github.com/jshea2/DMX-Dashboard/releases/latest
+
+### Build release artifacts
+
+```
+npm run electron:build:release
+```
+
+### Publish a release
+
+**Option A (GitHub web UI):**
+1. Go to https://github.com/jshea2/DMX-Dashboard/releases
+2. Click **Draft a new release**
+3. Tag format: `vX.Y.Z` (example `v1.0.1`)
+4. Upload release assets from `dist/`
+
+**Option B (GitHub CLI):**
+```
+gh release create v1.0.1 dist/* --title "v1.0.1" --notes "Release notes here"
 ```
 
 ## License

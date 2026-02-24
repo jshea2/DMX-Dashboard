@@ -9,6 +9,37 @@ import AccessRequestNotification from './components/AccessRequestNotification';
 import { WebSocketProvider, useWebSocketContext } from './contexts/WebSocketContext';
 import './App.css';
 
+function RootRedirect() {
+  const [targetPath, setTargetPath] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch('/api/config')
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled) return;
+        const layouts = data?.showLayouts || [];
+        const activeLayout = layouts.find(l => l.id === data?.activeLayoutId) || layouts[0];
+        if (activeLayout?.urlSlug) {
+          setTargetPath(`/dashboard/${activeLayout.urlSlug}`);
+        } else {
+          setTargetPath('/dashboard');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTargetPath('/dashboard');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!targetPath) return null;
+  return <Navigate to={targetPath} replace />;
+}
+
 function AppContent() {
   const { role } = useWebSocketContext();
   const [pendingRequests, setPendingRequests] = useState([]);
@@ -106,7 +137,7 @@ function AppContent() {
         onDeny={handleDeny}
       />
       <Routes>
-        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/" element={<RootRedirect />} />
         <Route path="/dashboard" element={<DashboardMenu />} />
         <Route path="/dashboard/:urlSlug" element={<Dashboard />} />
         <Route path="/fixture/:fixtureId" element={<FixtureDetail />} />

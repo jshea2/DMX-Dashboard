@@ -43,9 +43,11 @@ const useWebSocket = () => {
     }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // In dev mode, React runs on 3001 but backend/WebSocket is on 2996
-    const wsPort = process.env.NODE_ENV === 'development' ? 2996 : (window.location.port || 2996);
-    const wsUrl = `${protocol}//${window.location.hostname}:${wsPort}`;
+    // In dev mode, React runs on 3001 but backend/WebSocket is on 2996.
+    // In production, always use current origin host (includes port when non-default).
+    const wsUrl = process.env.NODE_ENV === 'development'
+      ? `${protocol}//${window.location.hostname}:2996`
+      : `${protocol}//${window.location.host}`;
 
     ws.current = new WebSocket(wsUrl);
 

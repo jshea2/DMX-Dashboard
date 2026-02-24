@@ -15,6 +15,7 @@ const ColorWheel = ({
   disabled = false,
   showWheel = true,
   sliderMaxWidth = 200,
+  showBrightnessSlider = true,
   lockHueSat = false,
   syncHueSatFromProps = false,
   initialHsv = null,
@@ -463,25 +464,27 @@ const ColorWheel = ({
       )}
 
       {/* Brightness slider */}
-      <div style={{ width: '100%', maxWidth: sliderMaxWidth }}>
-        <Slider
-          label=""
-          value={internalHSVRef.current.v}
-          onChange={handleBrightnessChange}
-          min={0}
-          max={100}
-          color="intensity"
-          unit="%"
-          hasManualValue={hasManualValue}
-          isOverridden={isOverridden}
-          isFrozen={isFrozen}
-          lookContributors={lookContributors}
-          lookIntensity={lookIntensity}
-          disabled={disabled}
-          customThumbColor={thumbRgbString}
-          customTrackGradient={trackGradient}
-        />
-      </div>
+      {showBrightnessSlider && (
+        <div style={{ width: '100%', maxWidth: sliderMaxWidth }}>
+          <Slider
+            label=""
+            value={internalHSVRef.current.v}
+            onChange={handleBrightnessChange}
+            min={0}
+            max={100}
+            color="intensity"
+            unit="%"
+            hasManualValue={hasManualValue}
+            isOverridden={isOverridden}
+            isFrozen={isFrozen}
+            lookContributors={lookContributors}
+            lookIntensity={lookIntensity}
+            disabled={disabled}
+            customThumbColor={thumbRgbString}
+            customTrackGradient={trackGradient}
+          />
+        </div>
+      )}
     </div>
   );
 };

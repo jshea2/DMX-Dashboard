@@ -6,6 +6,25 @@ import ColorWheel from '../components/ColorWheel';
 import ConnectedUsers from '../components/ConnectedUsers';
 import { rgbToHsv, hsvToRgb } from '../utils/color';
 
+const LOOK_COLOR_MAP = {
+  purple: '#9b4ae2',
+  orange: '#e2904a',
+  cyan: '#4ae2e2',
+  pink: '#e24a90',
+  yellow: '#e2e24a',
+  blue: '#4a90e2',
+  red: '#e24a4a',
+  green: '#4ae24a'
+};
+const PROFILE_LINK_STORAGE_KEY = 'fixture-profile-link-map:v1';
+
+const cloneLinkPayloadValue = (value) => {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return [...value];
+  if (typeof value === 'object') return { ...value };
+  return value;
+};
+
 // HTP Metadata Hook - computes which looks control which channels
 const useHTPMetadata = (state, config, channelOverrides, frozenChannels = {}) => {
   return useMemo(() => {
@@ -225,12 +244,134 @@ const Dashboard = () => {
   const [frozenChannels, setFrozenChannels] = useState({});  // Tracks frozen values after recording {key: frozenValue}
   const [accessDenied, setAccessDenied] = useState(false);
   const [dashboardRole, setDashboardRole] = useState('viewer');
+  const [showFixtureEditor, setShowFixtureEditor] = useState(false);
+  const [fixtureEditorSectionId, setFixtureEditorSectionId] = useState(null);
+  const [fixtureEditorSectionName, setFixtureEditorSectionName] = useState('Fixtures');
+  const [fixtureEditorDraft, setFixtureEditorDraft] = useState([]);
+  const [fixtureEditorSaving, setFixtureEditorSaving] = useState(false);
+  const [fixtureEditorError, setFixtureEditorError] = useState('');
+  const [showLookEditor, setShowLookEditor] = useState(false);
+  const [lookEditorSectionId, setLookEditorSectionId] = useState(null);
+  const [lookEditorSectionName, setLookEditorSectionName] = useState('Looks');
+  const [lookEditorDraft, setLookEditorDraft] = useState([]);
+  const [lookEditorSaving, setLookEditorSaving] = useState(false);
+  const [lookEditorError, setLookEditorError] = useState('');
+  const [profileLinkMap, setProfileLinkMap] = useState({});
   const lastRgbByFixtureRef = useRef({});
   const lastHsvByFixtureRef = useRef({});
+  const lastToggleOnBrightnessRef = useRef({});
   const pendingClearRef = useRef(new Set());
+  const canEditSectionLayout = dashboardRole === 'editor' || role === 'editor' || isEditorAnywhere;
+  const readProfileLinkMap = useCallback(() => {
+    try {
+      const raw = window.localStorage.getItem(PROFILE_LINK_STORAGE_KEY);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return parsed;
+    } catch (err) {
+      console.warn('Failed to parse profile link map:', err);
+      return {};
+    }
+  }, []);
+
+  const persistProfileLinkMap = useCallback((nextMap) => {
+    setProfileLinkMap(nextMap);
+    try {
+      window.localStorage.setItem(PROFILE_LINK_STORAGE_KEY, JSON.stringify(nextMap));
+    } catch (err) {
+      console.warn('Failed to write profile link map:', err);
+    }
+  }, []);
+
+  const toggleFixtureProfileLink = useCallback((profileId) => {
+    if (!profileId) return;
+    const nextMap = { ...profileLinkMap };
+    const willEnable = !nextMap[profileId];
+    if (willEnable) {
+      nextMap[profileId] = true;
+    } else {
+      delete nextMap[profileId];
+    }
+    persistProfileLinkMap(nextMap);
+  }, [profileLinkMap, persistProfileLinkMap]);
+
+  useEffect(() => {
+    setProfileLinkMap(readProfileLinkMap());
+    const handleStorage = (event) => {
+      if (event.key === PROFILE_LINK_STORAGE_KEY) {
+        setProfileLinkMap(readProfileLinkMap());
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [readProfileLinkMap]);
+
   const sendDashboardUpdate = useCallback((data) => {
-    sendUpdate(data, activeLayout?.id);
-  }, [sendUpdate, activeLayout?.id]);
+    const hasLinkedProfiles = Object.keys(profileLinkMap).length > 0;
+    const fixtures = (config?.fixtures || []).filter(Boolean);
+
+    if (!hasLinkedProfiles || fixtures.length === 0) {
+      sendUpdate(data, activeLayout?.id);
+      return;
+    }
+
+    const fixtureById = fixtures.reduce((acc, fixture) => {
+      acc[fixture.id] = fixture;
+      return acc;
+    }, {});
+
+    const linkedTargetCache = {};
+    const getLinkedTargets = (sourceFixtureId) => {
+      if (Object.prototype.hasOwnProperty.call(linkedTargetCache, sourceFixtureId)) {
+        return linkedTargetCache[sourceFixtureId];
+      }
+
+      const sourceFixture = fixtureById[sourceFixtureId];
+      const profileId = sourceFixture?.profileId;
+      if (!profileId || !profileLinkMap[profileId]) {
+        linkedTargetCache[sourceFixtureId] = [];
+        return [];
+      }
+
+      const targets = fixtures
+        .filter(fixture => fixture?.id !== sourceFixtureId && fixture?.profileId === profileId)
+        .map(fixture => fixture.id);
+
+      linkedTargetCache[sourceFixtureId] = targets;
+      return targets;
+    };
+
+    const payload = { ...data };
+    const mirrorField = (fieldName) => {
+      const sourceMap = data[fieldName];
+      if (!sourceMap || typeof sourceMap !== 'object') return;
+
+      const nextMap = { ...sourceMap };
+      let hasChanges = false;
+
+      Object.entries(sourceMap).forEach(([sourceFixtureId, sourceValue]) => {
+        const targets = getLinkedTargets(sourceFixtureId);
+        if (targets.length === 0) return;
+
+        targets.forEach(targetId => {
+          if (Object.prototype.hasOwnProperty.call(sourceMap, targetId)) return;
+          nextMap[targetId] = cloneLinkPayloadValue(sourceValue);
+          hasChanges = true;
+        });
+      });
+
+      if (hasChanges) {
+        payload[fieldName] = nextMap;
+      }
+    };
+
+    mirrorField('fixtures');
+    mirrorField('fixtureHsv');
+    mirrorField('overriddenFixtures');
+
+    sendUpdate(payload, activeLayout?.id);
+  }, [sendUpdate, activeLayout?.id, profileLinkMap, config?.fixtures]);
   const resetFixtureColorCache = useCallback((fixtureIds) => {
     fixtureIds.forEach(fixtureId => {
       lastRgbByFixtureRef.current[fixtureId] = { r: 0, g: 0, b: 0 };
@@ -267,9 +408,7 @@ const Dashboard = () => {
         updates[comp.name] = 0;
       });
     }
-
-    resetFixtureColorCache([fixtureId]);
-  }, [resetFixtureColorCache]);
+  }, []);
 
   // Compute HTP metadata
   const { metadata: htpMetadata, channelsToRelease } = useHTPMetadata(state, config, channelOverrides, frozenChannels);
@@ -404,6 +543,252 @@ const Dashboard = () => {
     sendDashboardUpdate({ blackout: !state.blackout });
   };
 
+  const closeFixtureSectionEditor = useCallback(() => {
+    if (fixtureEditorSaving) return;
+    setShowFixtureEditor(false);
+    setFixtureEditorSectionId(null);
+    setFixtureEditorError('');
+  }, [fixtureEditorSaving]);
+
+  const openFixtureSectionEditor = useCallback((section) => {
+    if (!section || !config || !canEditSectionLayout) return;
+
+    const orderedFixtureItems = (section.items || [])
+      .filter(item => item.type === 'fixture')
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    const draft = orderedFixtureItems
+      .map(item => (config.fixtures || []).find(f => f && f.id === item.id))
+      .filter(Boolean)
+      .map(fixture => ({
+        id: fixture.id,
+        name: fixture.name || ''
+      }));
+
+    setFixtureEditorSectionId(section.id);
+    setFixtureEditorSectionName(section.name || 'Fixtures');
+    setFixtureEditorDraft(draft);
+    setFixtureEditorError('');
+    setShowFixtureEditor(true);
+  }, [config, canEditSectionLayout]);
+
+  const updateFixtureDraftName = useCallback((fixtureId, value) => {
+    setFixtureEditorDraft(prev =>
+      prev.map(item => (item.id === fixtureId ? { ...item, name: value } : item))
+    );
+  }, []);
+
+  const moveFixtureDraftItem = useCallback((index, direction) => {
+    setFixtureEditorDraft(prev => {
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const saveFixtureSectionEditor = useCallback(async () => {
+    if (!config || !activeLayout || !fixtureEditorSectionId) return;
+
+    setFixtureEditorSaving(true);
+    setFixtureEditorError('');
+
+    try {
+      const nextConfig = JSON.parse(JSON.stringify(config));
+      const layout = (nextConfig.showLayouts || []).find(l => l.id === activeLayout.id);
+      if (!layout) {
+        throw new Error('Could not find the active dashboard layout.');
+      }
+
+      const section = (layout.sections || []).find(s => s.id === fixtureEditorSectionId);
+      if (!section) {
+        throw new Error('Could not find the fixture section.');
+      }
+
+      const namesByFixtureId = new Map(
+        fixtureEditorDraft.map(item => [item.id, (item.name || '').trim()])
+      );
+
+      (nextConfig.fixtures || []).forEach(fixture => {
+        const nextName = namesByFixtureId.get(fixture.id);
+        if (typeof nextName === 'string' && nextName.length > 0) {
+          fixture.name = nextName;
+        }
+      });
+
+      const orderByFixtureId = new Map(
+        fixtureEditorDraft.map((item, index) => [item.id, index])
+      );
+
+      const reorderedItems = [...(section.items || [])].sort((a, b) => {
+        const aOrder = (a.type === 'fixture' && orderByFixtureId.has(a.id))
+          ? orderByFixtureId.get(a.id)
+          : Number.MAX_SAFE_INTEGER + (a.order ?? 0);
+        const bOrder = (b.type === 'fixture' && orderByFixtureId.has(b.id))
+          ? orderByFixtureId.get(b.id)
+          : Number.MAX_SAFE_INTEGER + (b.order ?? 0);
+        return aOrder - bOrder;
+      });
+
+      reorderedItems.forEach((item, index) => {
+        item.order = index;
+      });
+      section.items = reorderedItems;
+
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextConfig)
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to save fixture edits.');
+      }
+
+      const updatedConfig = result.config || nextConfig;
+      setConfig(updatedConfig);
+      const updatedLayout = updatedConfig.showLayouts?.find(l => l.id === activeLayout.id);
+      if (updatedLayout) {
+        setActiveLayout(updatedLayout);
+      }
+
+      setShowFixtureEditor(false);
+      setFixtureEditorSectionId(null);
+      setFixtureEditorError('');
+    } catch (error) {
+      console.error('Failed to save fixture section edits:', error);
+      setFixtureEditorError(error.message || 'Failed to save fixture edits.');
+    } finally {
+      setFixtureEditorSaving(false);
+    }
+  }, [config, activeLayout, fixtureEditorSectionId, fixtureEditorDraft]);
+
+  const closeLookSectionEditor = useCallback(() => {
+    if (lookEditorSaving) return;
+    setShowLookEditor(false);
+    setLookEditorSectionId(null);
+    setLookEditorError('');
+  }, [lookEditorSaving]);
+
+  const openLookSectionEditor = useCallback((section) => {
+    if (!section || !config || !canEditSectionLayout) return;
+
+    const orderedLookItems = (section.items || [])
+      .filter(item => item.type === 'look')
+      .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    const draft = orderedLookItems
+      .map(item => (config.looks || []).find(l => l && l.id === item.id))
+      .filter(Boolean)
+      .map(look => ({
+        id: look.id,
+        name: look.name || ''
+      }));
+
+    setLookEditorSectionId(section.id);
+    setLookEditorSectionName(section.name || 'Looks');
+    setLookEditorDraft(draft);
+    setLookEditorError('');
+    setShowLookEditor(true);
+  }, [config, canEditSectionLayout]);
+
+  const updateLookDraftName = useCallback((lookId, value) => {
+    setLookEditorDraft(prev =>
+      prev.map(item => (item.id === lookId ? { ...item, name: value } : item))
+    );
+  }, []);
+
+  const moveLookDraftItem = useCallback((index, direction) => {
+    setLookEditorDraft(prev => {
+      const targetIndex = index + direction;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const saveLookSectionEditor = useCallback(async () => {
+    if (!config || !activeLayout || !lookEditorSectionId) return;
+
+    setLookEditorSaving(true);
+    setLookEditorError('');
+
+    try {
+      const nextConfig = JSON.parse(JSON.stringify(config));
+      const layout = (nextConfig.showLayouts || []).find(l => l.id === activeLayout.id);
+      if (!layout) {
+        throw new Error('Could not find the active dashboard layout.');
+      }
+
+      const section = (layout.sections || []).find(s => s.id === lookEditorSectionId);
+      if (!section) {
+        throw new Error('Could not find the looks section.');
+      }
+
+      const namesByLookId = new Map(
+        lookEditorDraft.map(item => [item.id, (item.name || '').trim()])
+      );
+
+      (nextConfig.looks || []).forEach(look => {
+        const nextName = namesByLookId.get(look.id);
+        if (typeof nextName === 'string' && nextName.length > 0) {
+          look.name = nextName;
+        }
+      });
+
+      const orderByLookId = new Map(
+        lookEditorDraft.map((item, index) => [item.id, index])
+      );
+
+      const reorderedItems = [...(section.items || [])].sort((a, b) => {
+        const aOrder = (a.type === 'look' && orderByLookId.has(a.id))
+          ? orderByLookId.get(a.id)
+          : Number.MAX_SAFE_INTEGER + (a.order ?? 0);
+        const bOrder = (b.type === 'look' && orderByLookId.has(b.id))
+          ? orderByLookId.get(b.id)
+          : Number.MAX_SAFE_INTEGER + (b.order ?? 0);
+        return aOrder - bOrder;
+      });
+
+      reorderedItems.forEach((item, index) => {
+        item.order = index;
+      });
+      section.items = reorderedItems;
+
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextConfig)
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'Failed to save look edits.');
+      }
+
+      const updatedConfig = result.config || nextConfig;
+      setConfig(updatedConfig);
+      const updatedLayout = updatedConfig.showLayouts?.find(l => l.id === activeLayout.id);
+      if (updatedLayout) {
+        setActiveLayout(updatedLayout);
+      }
+
+      setShowLookEditor(false);
+      setLookEditorSectionId(null);
+      setLookEditorError('');
+    } catch (error) {
+      console.error('Failed to save look section edits:', error);
+      setLookEditorError(error.message || 'Failed to save look edits.');
+    } finally {
+      setLookEditorSaving(false);
+    }
+  }, [config, activeLayout, lookEditorSectionId, lookEditorDraft]);
+
   const handleLookChange = (lookId, value) => {
     sendDashboardUpdate({
       looks: {
@@ -411,6 +796,46 @@ const Dashboard = () => {
       }
     });
   };
+
+  const radioLookIds = useMemo(() => {
+    if (!activeLayout?.sections) return [];
+    const seen = new Set();
+    const ids = [];
+    (activeLayout.sections || []).forEach(section => {
+      (section.items || []).forEach(item => {
+        if (item?.type !== 'look') return;
+        const mode = item.lookUiMode || 'slider';
+        if (mode !== 'radio') return;
+        if (seen.has(item.id)) return;
+        seen.add(item.id);
+        ids.push(item.id);
+      });
+    });
+    return ids;
+  }, [activeLayout]);
+
+  const handleLookToggleButton = useCallback((lookId, currentLevel) => {
+    sendDashboardUpdate({
+      looks: {
+        [lookId]: currentLevel > 0.001 ? 0 : 1
+      }
+    });
+  }, [sendDashboardUpdate]);
+
+  const handleLookRadioButton = useCallback((lookId, currentLevel) => {
+    const updates = {};
+    if (currentLevel > 0.001) {
+      updates[lookId] = 0;
+    } else {
+      radioLookIds.forEach(id => {
+        updates[id] = id === lookId ? 1 : 0;
+      });
+      if (!Object.prototype.hasOwnProperty.call(updates, lookId)) {
+        updates[lookId] = 1;
+      }
+    }
+    sendDashboardUpdate({ looks: updates });
+  }, [radioLookIds, sendDashboardUpdate]);
 
   const handleFixtureChange = useCallback((fixtureId, property, value) => {
     sendDashboardUpdate({
@@ -636,23 +1061,94 @@ const Dashboard = () => {
     }
   };
 
-  const hasActiveLookForFixture = useCallback((fixtureId) => {
-    return (config?.looks || []).some(look => {
-      const level = state.looks?.[look.id] ?? 0;
-      return level > 0 && look.targets?.[fixtureId];
+  const getFixtureChannelNames = useCallback((profile) => {
+    const channelNames = [];
+    if (profile?.controls && Array.isArray(profile.controls)) {
+      profile.controls.forEach(control => {
+        if (control.components && Array.isArray(control.components)) {
+          control.components.forEach(comp => channelNames.push(comp.name));
+        }
+      });
+    } else if (profile?.channels && Array.isArray(profile.channels)) {
+      profile.channels.forEach(channel => channelNames.push(channel.name));
+    }
+    return channelNames;
+  }, []);
+
+  const getFixtureProfile = useCallback((fixtureId) => {
+    const fixture = (config?.fixtures || []).find(f => f.id === fixtureId);
+    if (!fixture) return null;
+    return (config?.fixtureProfiles || []).find(p => p.id === fixture.profileId) || null;
+  }, [config?.fixtures, config?.fixtureProfiles]);
+
+  const clearTrackingForFixtures = useCallback((fixtureIds = []) => {
+    if (!Array.isArray(fixtureIds) || fixtureIds.length === 0) return;
+
+    const keysToClear = new Set();
+    fixtureIds.forEach(fixtureId => {
+      const profile = getFixtureProfile(fixtureId);
+      if (!profile) return;
+      getFixtureChannelNames(profile).forEach(channelName => {
+        keysToClear.add(`${fixtureId}.${channelName}`);
+      });
     });
-  }, [config?.looks, state.looks]);
+
+    if (keysToClear.size === 0) return;
+
+    const deleteKeys = (prev) => {
+      const updated = { ...prev };
+      keysToClear.forEach(key => delete updated[key]);
+      return updated;
+    };
+
+    setChannelOverrides(deleteKeys);
+    setManuallyAdjusted(deleteKeys);
+    setFrozenChannels(deleteKeys);
+  }, [getFixtureChannelNames, getFixtureProfile]);
+
+  const buildOverrideFixtureSnapshot = useCallback((fixtureId, profile, channelUpdates = {}) => {
+    const snapshot = {};
+    const channelNames = getFixtureChannelNames(profile);
+    channelNames.forEach(channelName => {
+      const key = `${fixtureId}.${channelName}`;
+      const metaValue = htpMetadataRef.current?.[key]?.displayValue;
+      const directValue = state.fixtures?.[fixtureId]?.[channelName];
+      snapshot[channelName] = metaValue ?? directValue ?? 0;
+    });
+    return { ...snapshot, ...channelUpdates };
+  }, [getFixtureChannelNames, state.fixtures]);
 
   const getActiveLooksForFixture = useCallback((fixtureId) => {
-    const activeLooks = [];
-    (config?.looks || []).forEach(look => {
-      const lookLevel = state.looks?.[look.id] ?? 0;
-      if (lookLevel > 0 && look.targets?.[fixtureId]) {
-        activeLooks.push({ id: look.id, color: look.color || 'blue', level: lookLevel });
-      }
+    const profile = getFixtureProfile(fixtureId);
+    if (!profile) return [];
+
+    const activeById = {};
+    const channelNames = getFixtureChannelNames(profile);
+
+    channelNames.forEach(channelName => {
+      const key = `${fixtureId}.${channelName}`;
+      const contributors = htpMetadata?.[key]?.contributors || [];
+      contributors.forEach(contributor => {
+        if (!contributor?.lookId) return;
+        const level = state.looks?.[contributor.lookId] ?? 0;
+        if (level <= 0) return;
+        const existing = activeById[contributor.lookId];
+        if (!existing || level > existing.level) {
+          activeById[contributor.lookId] = {
+            id: contributor.lookId,
+            color: contributor.color || 'blue',
+            level
+          };
+        }
+      });
     });
-    return activeLooks;
-  }, [config?.looks, state.looks]);
+
+    return Object.values(activeById);
+  }, [getFixtureProfile, getFixtureChannelNames, htpMetadata, state.looks]);
+
+  const hasActiveLookForFixture = useCallback((fixtureId) => {
+    return getActiveLooksForFixture(fixtureId).length > 0;
+  }, [getActiveLooksForFixture]);
 
   const setFixtureChannelsToZero = (profile, fixtureState) => {
     if (profile.controls && Array.isArray(profile.controls)) {
@@ -670,10 +1166,15 @@ const Dashboard = () => {
     }
   };
 
-  const handleClearAllFixtures = () => {
+  const handleClearAllFixtures = (fixtureIds = null) => {
     const clearedFixtures = {};
     const overridesToClear = {};
-    (config.fixtures || []).filter(f => f).forEach(fixture => {
+    const fixtureHsvUpdates = {};
+    const fixturesToClear = (config.fixtures || [])
+      .filter(f => f)
+      .filter(fixture => !fixtureIds || fixtureIds.includes(fixture.id));
+
+    fixturesToClear.forEach(fixture => {
       const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
       if (profile) {
         clearedFixtures[fixture.id] = {};
@@ -699,14 +1200,39 @@ const Dashboard = () => {
             resetFixtureColorCache([fixture.id]);
           }
         }
+
+        // Keep fixture color UI in sync with clear/default result
+        if (profile.controls && Array.isArray(profile.controls)) {
+          const rgbControl = profile.controls.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
+          if (rgbControl?.components) {
+            const redComp = rgbControl.components.find(c => c.type === 'red');
+            const greenComp = rgbControl.components.find(c => c.type === 'green');
+            const blueComp = rgbControl.components.find(c => c.type === 'blue');
+            if (redComp && greenComp && blueComp) {
+              const nextR = Number(clearedFixtures[fixture.id][redComp.name] ?? 0);
+              const nextG = Number(clearedFixtures[fixture.id][greenComp.name] ?? 0);
+              const nextB = Number(clearedFixtures[fixture.id][blueComp.name] ?? 0);
+              const nextHsv = rgbToHsv(nextR, nextG, nextB);
+              fixtureHsvUpdates[fixture.id] = nextHsv;
+              setFixtureHsv(fixture.id, nextHsv);
+              lastRgbByFixtureRef.current[fixture.id] = { r: nextR, g: nextG, b: nextB };
+              lastHsvByFixtureRef.current[fixture.id] = nextHsv;
+            }
+          }
+        }
+
+        // Ensure we don't keep stale "pending clear" flags after explicit clear/home
+        pendingClearRef.current.delete(fixture.id);
       }
     });
+    if (Object.keys(clearedFixtures).length === 0) return;
     console.log('[Dashboard] Clear button clicked - applying defaults:', clearedFixtures);
-    sendDashboardUpdate({ fixtures: clearedFixtures, overriddenFixtures: overridesToClear });
-    // Clear overrides, manual adjustments, and frozen channels
-    setChannelOverrides({});
-    setManuallyAdjusted({});
-    setFrozenChannels({});
+    sendDashboardUpdate({
+      fixtures: clearedFixtures,
+      overriddenFixtures: overridesToClear,
+      fixtureHsv: Object.keys(fixtureHsvUpdates).length > 0 ? fixtureHsvUpdates : undefined
+    });
+    clearTrackingForFixtures(fixturesToClear.map(f => f.id));
   };
 
   // Get color for slider based on channel name
@@ -859,23 +1385,49 @@ const Dashboard = () => {
         return (
           <div key={section.id} className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h2 style={{ margin: 0 }}>{section.name}</h2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <h2 style={{ margin: 0 }}>{section.name}</h2>
+                {canEditSectionLayout && isFixturesOnly && (
+                  <button
+                    className="fixture-card-action btn btn-small"
+                    onClick={() => openFixtureSectionEditor(section)}
+                    style={{
+                      padding: '5px 8px',
+                      fontSize: '12px',
+                      background: '#2d2d2d',
+                      border: '1px solid #555',
+                      color: '#ddd',
+                      lineHeight: 1,
+                      cursor: 'pointer'
+                    }}
+                    title="Edit fixture names and order"
+                    aria-label="Edit fixture names and order"
+                  >
+                    ✎
+                  </button>
+                )}
+                {canEditSectionLayout && isLooksOnly && (
+                  <button
+                    className="fixture-card-action btn btn-small"
+                    onClick={() => openLookSectionEditor(section)}
+                    style={{
+                      padding: '5px 8px',
+                      fontSize: '12px',
+                      background: '#2d2d2d',
+                      border: '1px solid #555',
+                      color: '#ddd',
+                      lineHeight: 1,
+                      cursor: 'pointer'
+                    }}
+                    title="Edit look names and order"
+                    aria-label="Edit look names and order"
+                  >
+                    ✎
+                  </button>
+                )}
+              </div>
               {section.showClearButton && (() => {
-                // Check if any fixtures in this section have overrides
                 const fixtureItems = visibleItems.filter(item => item.type === 'fixture');
-                const hasOverrides = fixtureItems.some(item => {
-                  const fixture = (config.fixtures || []).find(f => f && f.id === item.id);
-                  if (!fixture) return false;
-                  const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
-                  if (!profile) return false;
-                  // Check if any channels have overrides (works with both control blocks and legacy)
-                  if (profile.controls && Array.isArray(profile.controls)) {
-                    return profile.controls.some(control =>
-                      control.components && control.components.some(comp => channelOverrides[`${fixture.id}.${comp.name}`])
-                    );
-                  }
-                  return profile.channels && profile.channels.some(ch => channelOverrides[`${fixture.id}.${ch.name}`]);
-                });
 
                 return (
                   <button
@@ -884,61 +1436,12 @@ const Dashboard = () => {
                       if (isLooksOnly) {
                         handleClearAllLooks();
                       } else if (isFixturesOnly) {
-                        if (hasOverrides) {
-                          // Clear only overrides for fixtures in this section
-                          const newOverrides = { ...channelOverrides };
-                          const fixturesToClear = {};
-                          fixtureItems.forEach(item => {
-                            const fixture = (config.fixtures || []).find(f => f && f.id === item.id);
-                            if (fixture) {
-                              const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
-                              if (profile) {
-                                // Clear overrides and apply defaults from Control Blocks
-                                fixturesToClear[fixture.id] = {};
-                                if (profile.controls && Array.isArray(profile.controls)) {
-                                  profile.controls.forEach(control => {
-                                    if (control.components && Array.isArray(control.components)) {
-                                      // Clear overrides for this control's channels
-                                      control.components.forEach(comp => {
-                                        delete newOverrides[`${fixture.id}.${comp.name}`];
-                                      });
-                                      // Apply defaults for this control
-                                      applyControlDefaults(control, fixturesToClear[fixture.id]);
-                                    }
-                                  });
-                                  const hasActiveLook = hasActiveLookForFixture(fixture.id);
-                                  if (hasActiveLook) {
-                                    setFixtureChannelsToZero(profile, fixturesToClear[fixture.id]);
-                                  } else {
-                                    applyDashboardClearDefaults(profile, fixture.id, fixturesToClear[fixture.id]);
-                                  }
-                                } else if (profile.channels) {
-                                  // Legacy fallback
-                                  profile.channels.forEach(ch => {
-                                    delete newOverrides[`${fixture.id}.${ch.name}`];
-                                    fixturesToClear[fixture.id][ch.name] = 0;
-                                  });
-                                  if (!hasActiveLookForFixture(fixture.id)) {
-                                    resetFixtureColorCache([fixture.id]);
-                                  }
-                                }
-                              }
-                            }
-                          });
-                          console.log('[Dashboard] Clear Overrides clicked - sending fixture resets:', fixturesToClear);
-                          setChannelOverrides(newOverrides);
-                          if (Object.keys(fixturesToClear).length > 0) {
-                            sendDashboardUpdate({ fixtures: fixturesToClear });
-                            resetFixtureColorCache(Object.keys(fixturesToClear));
-                          }
-                        } else {
-                          handleClearAllFixtures();
-                        }
+                        handleClearAllFixtures(fixtureItems.map(item => item.id));
                       }
                     }}
                     style={{ padding: '6px 12px', fontSize: '12px', background: '#555', border: '1px solid #666' }}
                   >
-                    {isFixturesOnly && hasOverrides ? 'Clear Overrides' : 'Clear'}
+                    {isFixturesOnly ? 'Clear All' : 'Clear'}
                   </button>
                 );
               })()}
@@ -948,35 +1451,111 @@ const Dashboard = () => {
               if (item.type === 'look') {
                 const look = (config.looks || []).find(l => l && l.id === item.id);
                 if (!look) return null;
+                const lookLevel = state.looks[look.id] || 0;
+                const lookPercent = Math.round(lookLevel * 100);
+                const lookUiMode = item.lookUiMode || 'slider';
+                const lookIsActive = lookLevel > 0.001;
+                const lookAccent = LOOK_COLOR_MAP[look.color] || '#4a90e2';
+                const isViewer = dashboardRole === 'viewer';
 
                 return (
                   <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
                     <div style={{ flex: 1 }}>
-                      <Slider
-                        label={look.name}
-                        value={(state.looks[look.id] || 0) * 100}
-                        min={0}
-                        max={100}
-                        step={1}
-                        onChange={(value) => handleLookChange(look.id, value)}
-                        unit="%"
-                        color={look.color || 'blue'}
-                        disabled={dashboardRole === 'viewer'}
-                      />
+                      {lookUiMode === 'slider' ? (
+                        <Slider
+                          label={look.name}
+                          value={lookLevel * 100}
+                          min={0}
+                          max={100}
+                          step={1}
+                          onChange={(value) => handleLookChange(look.id, value)}
+                          unit="%"
+                          color={look.color || 'blue'}
+                          disabled={isViewer}
+                        />
+                      ) : (
+                        <button
+                          className="btn"
+                          onClick={() => {
+                            if (lookUiMode === 'radio') {
+                              handleLookRadioButton(look.id, lookLevel);
+                            } else {
+                              handleLookToggleButton(look.id, lookLevel);
+                            }
+                          }}
+                          disabled={isViewer}
+                          style={{
+                            width: '100%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '10px',
+                            padding: '12px 14px',
+                            borderRadius: '10px',
+                            border: `2px solid ${lookIsActive ? lookAccent : '#555'}`,
+                            background: lookIsActive ? `${lookAccent}22` : '#2b2b2b',
+                            color: '#f0f0f0',
+                            cursor: isViewer ? 'not-allowed' : 'pointer',
+                            opacity: isViewer ? 0.5 : 1
+                          }}
+                        >
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px', fontWeight: 600 }}>
+                            {lookUiMode === 'radio' && (
+                              <span
+                                style={{
+                                  width: '11px',
+                                  height: '11px',
+                                  borderRadius: '50%',
+                                  background: lookIsActive ? lookAccent : 'transparent',
+                                  border: `2px solid ${lookAccent}`,
+                                  flexShrink: 0
+                                }}
+                              />
+                            )}
+                            {look.name}
+                          </span>
+                          <span style={{ fontSize: '13px', color: '#ddd', whiteSpace: 'nowrap' }}>
+                            {lookUiMode === 'radio'
+                              ? (lookIsActive ? 'Selected' : 'Off')
+                              : (lookIsActive ? 'On' : 'Off')} {lookPercent > 0 ? `(${lookPercent}%)` : ''}
+                          </span>
+                        </button>
+                      )}
                     </div>
+                    {lookUiMode === 'slider' && (
+                      <button
+                        className="btn btn-small"
+                        onClick={() => handleLookToggleButton(look.id, lookLevel)}
+                        disabled={isViewer}
+                        style={{
+                          padding: '6px 10px',
+                          fontSize: '12px',
+                          whiteSpace: 'nowrap',
+                          minWidth: '56px',
+                          background: lookIsActive ? `${lookAccent}33` : '#3a3a3a',
+                          border: `1px solid ${lookIsActive ? lookAccent : '#666'}`,
+                          color: '#f0f0f0',
+                          opacity: isViewer ? 0.5 : 1,
+                          cursor: isViewer ? 'not-allowed' : 'pointer'
+                        }}
+                        title={lookIsActive ? 'Turn look off' : 'Turn look on to 100%'}
+                      >
+                        {lookIsActive ? 'On' : 'Off'}
+                      </button>
+                    )}
                     {look.showRecordButton && (
                       <button
                         className={`btn btn-small record-btn ${recordingLook === look.id ? 'recording' : ''}`}
                         onClick={() => handleRecordLook(look.id)}
-                        disabled={dashboardRole === 'viewer'}
+                        disabled={isViewer}
                         style={{
                           padding: '6px 10px',
                           fontSize: '12px',
                           whiteSpace: 'nowrap',
                           background: '#444',
                           border: '1px solid #666',
-                          opacity: dashboardRole === 'viewer' ? 0.5 : 1,
-                          cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer'
+                          opacity: isViewer ? 0.5 : 1,
+                          cursor: isViewer ? 'not-allowed' : 'pointer'
                         }}
                         title="Record current fixture values to this look"
                       >
@@ -1065,6 +1644,18 @@ const Dashboard = () => {
                       const blueMeta = htpMetadata[`${fixture.id}.${rgbChannelMap.blue}`] || { displayValue: 0, contributors: [] };
                       const rgbMetas = [redMeta, greenMeta, blueMeta];
 
+                      // Combine contributors from all RGB channels
+                      const allContributors = rgbMetas.flatMap(m => m.contributors || []);
+                      const contributorMap = {};
+                      allContributors.forEach(c => {
+                        if (!contributorMap[c.color]) {
+                          contributorMap[c.color] = { color: c.color, value: c.value };
+                        } else {
+                          contributorMap[c.color].value = Math.max(contributorMap[c.color].value, c.value);
+                        }
+                      });
+                      lookContributors = Object.values(contributorMap);
+
                       const fixtureState = state.fixtures?.[fixture.id] || {};
                       directRgb = {
                         r: fixtureState[rgbChannelMap.red] ?? 0,
@@ -1100,23 +1691,17 @@ const Dashboard = () => {
                       const seedHsv = useHtpHsv ? htpHsv : rgbToHsv(directRgb.r, directRgb.g, directRgb.b);
                       const displayHsv = useHtpHsv ? htpHsv : (cachedHsv || seedHsv);
                       rgbHsv = { ...displayHsv, v: brightnessValue };
-                      if (!cachedHsv || useHtpHsv) {
+                      // Avoid render-loop writes: only seed cache when missing.
+                      // When looks are active we still use live HTP HSV (rgbHsv) for display/override behavior.
+                      if (!cachedHsv) {
                         setFixtureHsv(fixture.id, { ...displayHsv, v: brightnessValue });
                       }
-
-                      // Combine contributors from all RGB channels
-                      const allContributors = rgbMetas.flatMap(m => m.contributors || []);
-                      const contributorMap = {};
-                      allContributors.forEach(c => {
-                        if (!contributorMap[c.color]) {
-                          contributorMap[c.color] = { color: c.color, value: c.value };
-                        } else {
-                          contributorMap[c.color].value = Math.max(contributorMap[c.color].value, c.value);
-                        }
-                      });
-                      lookContributors = Object.values(contributorMap);
                     }
                   }
+                }
+
+                if (brightnessValue > 0.01) {
+                  lastToggleOnBrightnessRef.current[fixture.id] = brightnessValue;
                 }
 
                 // Toggle handler
@@ -1124,23 +1709,99 @@ const Dashboard = () => {
                   e.stopPropagation(); // Prevent navigation to detail page
                   if (toggleComponents.length === 0 || dashboardRole === 'viewer') return;
 
+                  const activeLooksForFixture = getActiveLooksForFixture(fixture.id);
+                  const hasActiveLooks = activeLooksForFixture.length > 0;
+                  const isFixtureAlreadyOverridden = Boolean(state.overriddenFixtures?.[fixture.id]?.active);
                   const turningOff = brightnessValue > 0;
+
+                  // If looks are active, toggle-on should return this fixture to look control
+                  // (instead of restoring stale manual override color/state).
+                  if (!turningOff && hasActiveLooks) {
+                    const releaseValues = {};
+                    const fixtureChannelKeys = [];
+                    getFixtureChannelNames(profile).forEach(channelName => {
+                      releaseValues[channelName] = 0;
+                      fixtureChannelKeys.push(`${fixture.id}.${channelName}`);
+                    });
+
+                    setChannelOverrides(prev => {
+                      const updated = { ...prev };
+                      fixtureChannelKeys.forEach(key => delete updated[key]);
+                      return updated;
+                    });
+                    setFrozenChannels(prev => {
+                      const updated = { ...prev };
+                      fixtureChannelKeys.forEach(key => delete updated[key]);
+                      return updated;
+                    });
+
+                    sendDashboardUpdate({
+                      fixtures: {
+                        [fixture.id]: releaseValues
+                      },
+                      overriddenFixtures: {
+                        [fixture.id]: null
+                      }
+                    });
+                    return;
+                  }
+
+                  if (turningOff && brightnessValue > 0.01) {
+                    lastToggleOnBrightnessRef.current[fixture.id] = brightnessValue;
+                  }
+                  const restoreBrightness = Math.max(
+                    1,
+                    Math.min(100, Number(lastToggleOnBrightnessRef.current[fixture.id]) || 100)
+                  );
                   const updates = {};
+                  let fixtureHsvPayload;
 
                   if (intensityChannelName) {
-                    const newValue = turningOff ? 0 : 100;
+                    const newValue = turningOff ? 0 : restoreBrightness;
                     toggleComponents.forEach(comp => {
                       updates[comp.name] = newValue;
                     });
+
+                    // Strict Dimmer+RGB: turning on with no active looks should seed RGB defaults
+                    const rgbControlCount = (profile.controls || []).filter(c => c.controlType === 'RGB' || c.controlType === 'RGBW').length;
+                    const intensityControlCount = (profile.controls || []).filter(c => c.controlType === 'Intensity').length;
+                    const isLegacyDimmerRgbProfile = intensityControlCount === 1 && rgbControlCount === 1 && (profile.controls || []).length === 2;
+                    const isStrictDimmerColor = Boolean(rgbControl?.brightnessDrivenByIntensity) || isLegacyDimmerRgbProfile;
+                    if (!turningOff && !hasActiveLooks && isStrictDimmerColor && redComp && greenComp && blueComp) {
+                      const fixtureState = state.fixtures?.[fixture.id] || {};
+                      const currentRed = fixtureState[redComp.name] ?? 0;
+                      const currentGreen = fixtureState[greenComp.name] ?? 0;
+                      const currentBlue = fixtureState[blueComp.name] ?? 0;
+                      const displayedRed = htpMetadata[`${fixture.id}.${redComp.name}`]?.displayValue ?? 0;
+                      const displayedGreen = htpMetadata[`${fixture.id}.${greenComp.name}`]?.displayValue ?? 0;
+                      const displayedBlue = htpMetadata[`${fixture.id}.${blueComp.name}`]?.displayValue ?? 0;
+                      const isCurrentlyBlack =
+                        Math.max(currentRed, currentGreen, currentBlue, displayedRed, displayedGreen, displayedBlue) <= 0.01;
+                      if (isCurrentlyBlack) {
+                        const dv = rgbControl?.defaultValue;
+                        const hasRgbDefault = dv?.type === 'rgb' || dv?.type === 'rgbw';
+                        const isRgbDefaultBlack = hasRgbDefault && Number(dv.r ?? 0) === 0 && Number(dv.g ?? 0) === 0 && Number(dv.b ?? 0) === 0;
+                        const defaultRgb = (hasRgbDefault && !isRgbDefaultBlack)
+                          ? {
+                              r: (dv.r ?? 1) * 100,
+                              g: (dv.g ?? 1) * 100,
+                              b: (dv.b ?? 1) * 100
+                            }
+                          : { r: 100, g: 100, b: 100 };
+                        updates[redComp.name] = defaultRgb.r;
+                        updates[greenComp.name] = defaultRgb.g;
+                        updates[blueComp.name] = defaultRgb.b;
+                      }
+                    }
                   } else if (rgbControl && redComp && greenComp && blueComp) {
                     if (turningOff) {
                       toggleComponents.forEach(comp => {
                         updates[comp.name] = 0;
                       });
                     } else {
-                      const cached = hsvCache?.[fixture.id] || lastHsvByFixtureRef.current[fixture.id];
+                      const cached = hsvCache?.[fixture.id] || rgbHsv || lastHsvByFixtureRef.current[fixture.id];
                       const hsv = cached || { h: 0, s: 0, v: 100 };
-                      const restoredV = hsv.v > 0 ? hsv.v : 100;
+                      const restoredV = hsv.v > 0 ? hsv.v : restoreBrightness;
                       const rgb = hsvToRgb(hsv.h, hsv.s, restoredV);
                       updates[redComp.name] = rgb.r || 0;
                       updates[greenComp.name] = rgb.g || 0;
@@ -1151,26 +1812,26 @@ const Dashboard = () => {
                         }
                       });
                       setFixtureHsv(fixture.id, { h: hsv.h, s: hsv.s, v: restoredV });
+                      fixtureHsvPayload = { [fixture.id]: { h: hsv.h, s: hsv.s, v: restoredV } };
                     }
                   }
 
-                  const fixtureHsv = (!turningOff && !intensityChannelName && rgbControl && redComp && greenComp && blueComp)
-                    ? { [fixture.id]: { h: (hsvCache?.[fixture.id]?.h ?? lastHsvByFixtureRef.current[fixture.id]?.h ?? 0), s: (hsvCache?.[fixture.id]?.s ?? lastHsvByFixtureRef.current[fixture.id]?.s ?? 0), v: (hsvCache?.[fixture.id]?.v ?? lastHsvByFixtureRef.current[fixture.id]?.v ?? 100) } }
-                    : undefined;
+                  const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
+                    ? buildOverrideFixtureSnapshot(fixture.id, profile, updates)
+                    : updates;
 
                   sendDashboardUpdate({
                     fixtures: {
-                      [fixture.id]: updates
+                      [fixture.id]: fixtureValues
                     },
-                    fixtureHsv: fixtureHsv
+                    fixtureHsv: fixtureHsvPayload,
+                    overriddenFixtures: hasActiveLooks ? {
+                      [fixture.id]: {
+                        active: true,
+                        looks: activeLooksForFixture.map(look => ({ id: look.id, color: look.color }))
+                      }
+                    } : undefined
                   });
-                };
-
-                // Color map for look indicator dots
-                const colorMap = {
-                  purple: '#9b4ae2', orange: '#e2904a', cyan: '#4ae2e2',
-                  pink: '#e24a90', yellow: '#e2e24a', blue: '#4a90e2',
-                  red: '#e24a4a', green: '#4ae24a'
                 };
 
                 // Check if fixture is in override mode (from server state)
@@ -1188,10 +1849,9 @@ const Dashboard = () => {
                   boxShadow = `0 0 ${12 * intensity}px ${glowColor}`;
                 }
 
-                const sliderAvailable = (item.controlMode === 'slider') && (Boolean(intensityChannelName) || Boolean(rgbControl));
-                const showToggle = !sliderAvailable;
-                const isPendingClear = pendingClearRef.current.has(fixture.id);
-                const rgbValues = directRgb;
+                const sliderAvailable = Boolean(intensityChannelName) || Boolean(rgbControl);
+                const showToggle = toggleComponents.length > 0;
+                const isProfileLinked = Boolean(profile?.id && profileLinkMap[profile.id]);
 
                 const handleFixtureCardClick = (e) => {
                   const target = e.target;
@@ -1240,7 +1900,7 @@ const Dashboard = () => {
                                   width: '8px',
                                   height: '8px',
                                   borderRadius: '50%',
-                                  background: isFixtureOverridden ? '#666' : (colorMap[contributor.color] || '#4a90e2'),
+                                  background: isFixtureOverridden ? '#666' : (LOOK_COLOR_MAP[contributor.color] || '#4a90e2'),
                                   opacity: isFixtureOverridden ? 0.7 : (0.5 + ((contributor.value || 0) / 100) * 0.5),
                                   flexShrink: 0
                                 }}
@@ -1250,42 +1910,94 @@ const Dashboard = () => {
                         )}
                       </div>
 
-                      {/* Toggle button - RGB color for color fixtures, grey for dimmer-only */}
-                      {showToggle && toggleComponents.length > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <button
-                          onClick={handleToggle}
-                          disabled={dashboardRole === 'viewer'}
-                          className="fixture-card-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (dashboardRole === 'viewer') return;
+                            toggleFixtureProfileLink(profile?.id);
+                          }}
+                          disabled={dashboardRole === 'viewer' || !profile?.id}
+                          className="fixture-card-action btn btn-small"
                           style={{
-                            width: '56px',
+                            width: '36px',
                             height: '32px',
-                            borderRadius: '16px',
-                            background: brightnessValue > 0 
-                              ? (colorPreview || `rgb(${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)})`)
-                              : '#333',
-                            border: 'none',
-                            cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
-                            position: 'relative',
-                            transition: 'background 0.2s',
-                            opacity: dashboardRole === 'viewer' ? 0.5 : 1,
+                            padding: 0,
+                            fontSize: '18px',
+                            lineHeight: 1,
+                            background: isProfileLinked ? '#2f6a45' : '#555',
+                            color: isProfileLinked ? '#c9ffd9' : '#ddd',
+                            border: `1px solid ${isProfileLinked ? '#4ec178' : '#666'}`,
+                            opacity: (dashboardRole === 'viewer' || !profile?.id) ? 0.5 : 1,
+                            cursor: (dashboardRole === 'viewer' || !profile?.id) ? 'not-allowed' : 'pointer',
                             flexShrink: 0
                           }}
+                          title={isProfileLinked
+                            ? '↯ Linked to fixtures with this profile'
+                            : '↯ Link fixtures with this profile'}
                         >
-                          <div
-                            style={{
-                              width: '24px',
-                              height: '24px',
-                              borderRadius: '50%',
-                              background: '#fff',
-                              position: 'absolute',
-                              top: '4px',
-                              left: brightnessValue > 0 ? '28px' : '4px',
-                              transition: 'left 0.2s',
-                              boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-                            }}
-                          />
+                          ↯
                         </button>
-                      )}
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (dashboardRole === 'viewer') return;
+                            handleClearAllFixtures([fixture.id]);
+                          }}
+                          disabled={dashboardRole === 'viewer'}
+                          className="fixture-card-action btn btn-small"
+                          style={{
+                            padding: '5px 10px',
+                            fontSize: '11px',
+                            background: '#555',
+                            border: '1px solid #666',
+                            opacity: dashboardRole === 'viewer' ? 0.5 : 1,
+                            cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
+                            flexShrink: 0
+                          }}
+                          title="Clear this fixture"
+                        >
+                          Clear
+                        </button>
+
+                        {/* Toggle button - RGB color for color fixtures, grey for dimmer-only */}
+                        {showToggle && toggleComponents.length > 0 && (
+                          <button
+                            onClick={handleToggle}
+                            disabled={dashboardRole === 'viewer'}
+                            className="fixture-card-action"
+                            style={{
+                              width: '56px',
+                              height: '32px',
+                              borderRadius: '16px',
+                              background: brightnessValue > 0
+                                ? (colorPreview || `rgb(${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)})`)
+                                : '#333',
+                              border: 'none',
+                              cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
+                              position: 'relative',
+                              transition: 'background 0.2s',
+                              opacity: dashboardRole === 'viewer' ? 0.5 : 1,
+                              flexShrink: 0
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: '24px',
+                                height: '24px',
+                                borderRadius: '50%',
+                                background: '#fff',
+                                position: 'absolute',
+                                top: '4px',
+                                left: brightnessValue > 0 ? '28px' : '4px',
+                                transition: 'left 0.2s',
+                                boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
+                              }}
+                            />
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {sliderAvailable && (
@@ -1304,9 +2016,13 @@ const Dashboard = () => {
                             onChange={(value) => {
                               const activeLooksForFixture = getActiveLooksForFixture(fixture.id);
                               const hasActiveLooks = activeLooksForFixture.length > 0;
+                              const isFixtureAlreadyOverridden = Boolean(state.overriddenFixtures?.[fixture.id]?.active);
 
                               if (pendingClearRef.current.has(fixture.id)) {
                                 pendingClearRef.current.delete(fixture.id);
+                              }
+                              if (value > 0.01) {
+                                lastToggleOnBrightnessRef.current[fixture.id] = value;
                               }
 
                               setFrozenChannels(prev => {
@@ -1322,11 +2038,45 @@ const Dashboard = () => {
                                 setChannelOverrides(prev => ({ ...prev, [intensityChannelName]: true }));
                               }
 
+                              const rgbControlCount = (profile.controls || []).filter(c => c.controlType === 'RGB' || c.controlType === 'RGBW').length;
+                              const intensityControlCount = (profile.controls || []).filter(c => c.controlType === 'Intensity').length;
+                              const isLegacyDimmerRgbProfile = intensityControlCount === 1 && rgbControlCount === 1 && (profile.controls || []).length === 2;
+                              const isStrictDimmerColor = Boolean(rgbControl?.brightnessDrivenByIntensity) || isLegacyDimmerRgbProfile;
+                              const seededRgbChannels = {};
+                              if (!hasActiveLooks && isStrictDimmerColor && value > 0 && redComp && greenComp && blueComp) {
+                                const fixtureState = state.fixtures?.[fixture.id] || {};
+                                const currentRed = fixtureState[redComp.name] ?? 0;
+                                const currentGreen = fixtureState[greenComp.name] ?? 0;
+                                const currentBlue = fixtureState[blueComp.name] ?? 0;
+                                const displayedRed = htpMetadata[`${fixture.id}.${redComp.name}`]?.displayValue ?? 0;
+                                const displayedGreen = htpMetadata[`${fixture.id}.${greenComp.name}`]?.displayValue ?? 0;
+                                const displayedBlue = htpMetadata[`${fixture.id}.${blueComp.name}`]?.displayValue ?? 0;
+                                const isCurrentlyBlack =
+                                  Math.max(currentRed, currentGreen, currentBlue, displayedRed, displayedGreen, displayedBlue) <= 0.01;
+                                if (isCurrentlyBlack) {
+                                  const dv = rgbControl?.defaultValue;
+                                  const hasRgbDefault = dv?.type === 'rgb' || dv?.type === 'rgbw';
+                                  const isRgbDefaultBlack = hasRgbDefault && Number(dv.r ?? 0) === 0 && Number(dv.g ?? 0) === 0 && Number(dv.b ?? 0) === 0;
+                                  const defaultRgb = (hasRgbDefault && !isRgbDefaultBlack)
+                                    ? {
+                                        r: (dv.r ?? 1) * 100,
+                                        g: (dv.g ?? 1) * 100,
+                                        b: (dv.b ?? 1) * 100
+                                      }
+                                    : { r: 100, g: 100, b: 100 };
+                                  seededRgbChannels[redComp.name] = defaultRgb.r;
+                                  seededRgbChannels[greenComp.name] = defaultRgb.g;
+                                  seededRgbChannels[blueComp.name] = defaultRgb.b;
+                                }
+                              }
+
+                              const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
+                                ? buildOverrideFixtureSnapshot(fixture.id, profile, { [intensityChannelName]: value, ...seededRgbChannels })
+                                : { [intensityChannelName]: value, ...seededRgbChannels };
+
                               sendDashboardUpdate({
                                 fixtures: {
-                                  [fixture.id]: {
-                                    [intensityChannelName]: value
-                                  }
+                                  [fixture.id]: fixtureValues
                                 },
                                 overriddenFixtures: hasActiveLooks ? {
                                   [fixture.id]: {
@@ -1348,10 +2098,19 @@ const Dashboard = () => {
                             brightness={rgbHsv.v}
                             lockHueSat={true}
                             onChange={(h, s, v) => {
-                              const cached = hsvCache?.[fixture.id] || rgbHsv;
-                              const nextH = cached?.h ?? h;
-                              const nextS = cached?.s ?? s;
+                              const activeLooksForFixture = getActiveLooksForFixture(fixture.id);
+                              const hasActiveLooks = activeLooksForFixture.length > 0;
+                              const isFixtureAlreadyOverridden = Boolean(state.overriddenFixtures?.[fixture.id]?.active);
+
+                              // Always preserve hue/saturation from the live displayed color on the card.
+                              // Dashboard brightness override should only change V.
+                              const hsvSource = rgbHsv || hsvCache?.[fixture.id];
+                              const nextH = hsvSource?.h ?? h;
+                              const nextS = hsvSource?.s ?? s;
                               setFixtureHsv(fixture.id, { h: nextH, s: nextS, v });
+                              if (v > 0.01) {
+                                lastToggleOnBrightnessRef.current[fixture.id] = v;
+                              }
                               const nextRgb = hsvToRgb(nextH, nextS, v);
 
                               if (pendingClearRef.current.has(fixture.id)) {
@@ -1366,8 +2125,6 @@ const Dashboard = () => {
                                 return updated;
                               });
 
-                              const activeLooksForFixture = getActiveLooksForFixture(fixture.id);
-                              const hasActiveLooks = activeLooksForFixture.length > 0;
                               if (hasActiveLooks) {
                                 setChannelOverrides(prev => ({
                                   ...prev,
@@ -1377,13 +2134,18 @@ const Dashboard = () => {
                                 }));
                               }
 
+                              const rgbChannelUpdates = {
+                                [redComp.name]: nextRgb.r || 0,
+                                [greenComp.name]: nextRgb.g || 0,
+                                [blueComp.name]: nextRgb.b || 0
+                              };
+                              const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
+                                ? buildOverrideFixtureSnapshot(fixture.id, profile, rgbChannelUpdates)
+                                : rgbChannelUpdates;
+
                               sendDashboardUpdate({
                                 fixtures: {
-                                  [fixture.id]: {
-                                    [redComp.name]: nextRgb.r || 0,
-                                    [greenComp.name]: nextRgb.g || 0,
-                                    [blueComp.name]: nextRgb.b || 0
-                                  }
+                                  [fixture.id]: fixtureValues
                                 },
                                 fixtureHsv: {
                                   [fixture.id]: { h: nextH, s: nextS, v }
@@ -1421,6 +2183,362 @@ const Dashboard = () => {
           </div>
         );
       })}
+
+      {showFixtureEditor && (
+        <div
+          onClick={closeFixtureSectionEditor}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2200,
+            padding: '20px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '680px',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              background: '#222',
+              border: '1px solid #444',
+              borderRadius: '12px',
+              padding: '18px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <h3 style={{ margin: 0 }}>Edit {fixtureEditorSectionName}</h3>
+              <button
+                className="btn btn-small"
+                onClick={closeFixtureSectionEditor}
+                disabled={fixtureEditorSaving}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '12px',
+                  background: '#444',
+                  border: '1px solid #666',
+                  cursor: fixtureEditorSaving ? 'not-allowed' : 'pointer',
+                  opacity: fixtureEditorSaving ? 0.5 : 1
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <p style={{ margin: '0 0 14px 0', color: '#aaa', fontSize: '13px' }}>
+              Rename fixture cards and change their order for this dashboard section.
+            </p>
+
+            {fixtureEditorError && (
+              <div
+                style={{
+                  marginBottom: '12px',
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #a33',
+                  background: '#3a1f1f',
+                  color: '#ffb3b3',
+                  fontSize: '13px'
+                }}
+              >
+                {fixtureEditorError}
+              </div>
+            )}
+
+            {fixtureEditorDraft.length === 0 ? (
+              <div style={{ padding: '10px', border: '1px solid #444', borderRadius: '6px', color: '#aaa', fontSize: '13px' }}>
+                No fixtures found in this section.
+              </div>
+            ) : (
+              fixtureEditorDraft.map((fixtureItem, index) => (
+                <div
+                  key={fixtureItem.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '36px 1fr 84px',
+                    gap: '8px',
+                    alignItems: 'center',
+                    padding: '8px',
+                    border: '1px solid #3d3d3d',
+                    borderRadius: '6px',
+                    marginBottom: '8px',
+                    background: '#1e1e1e'
+                  }}
+                >
+                  <div style={{ textAlign: 'center', color: '#888', fontSize: '12px' }}>
+                    {index + 1}
+                  </div>
+                  <input
+                    type="text"
+                    value={fixtureItem.name}
+                    onChange={(e) => updateFixtureDraftName(fixtureItem.id, e.target.value)}
+                    disabled={fixtureEditorSaving}
+                    style={{
+                      width: '100%',
+                      background: '#111b35',
+                      border: '1px solid #3a4d76',
+                      borderRadius: '4px',
+                      color: '#f0f0f0',
+                      padding: '8px 10px',
+                      fontSize: '14px'
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn btn-small"
+                      onClick={() => moveFixtureDraftItem(index, -1)}
+                      disabled={fixtureEditorSaving || index === 0}
+                      style={{
+                        width: '36px',
+                        padding: '4px 0',
+                        fontSize: '12px',
+                        background: '#2f2f2f',
+                        border: '1px solid #555',
+                        opacity: (fixtureEditorSaving || index === 0) ? 0.4 : 1,
+                        cursor: (fixtureEditorSaving || index === 0) ? 'not-allowed' : 'pointer'
+                      }}
+                      title="Move up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="btn btn-small"
+                      onClick={() => moveFixtureDraftItem(index, 1)}
+                      disabled={fixtureEditorSaving || index === fixtureEditorDraft.length - 1}
+                      style={{
+                        width: '36px',
+                        padding: '4px 0',
+                        fontSize: '12px',
+                        background: '#2f2f2f',
+                        border: '1px solid #555',
+                        opacity: (fixtureEditorSaving || index === fixtureEditorDraft.length - 1) ? 0.4 : 1,
+                        cursor: (fixtureEditorSaving || index === fixtureEditorDraft.length - 1) ? 'not-allowed' : 'pointer'
+                      }}
+                      title="Move down"
+                    >
+                      ↓
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' }}>
+              <button
+                className="btn btn-small"
+                onClick={closeFixtureSectionEditor}
+                disabled={fixtureEditorSaving}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  background: '#444',
+                  border: '1px solid #666',
+                  opacity: fixtureEditorSaving ? 0.5 : 1,
+                  cursor: fixtureEditorSaving ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-small btn-primary"
+                onClick={saveFixtureSectionEditor}
+                disabled={fixtureEditorSaving}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  opacity: fixtureEditorSaving ? 0.5 : 1,
+                  cursor: fixtureEditorSaving ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {fixtureEditorSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLookEditor && (
+        <div
+          onClick={closeLookSectionEditor}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 2200,
+            padding: '20px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '680px',
+              maxHeight: '85vh',
+              overflowY: 'auto',
+              background: '#222',
+              border: '1px solid #444',
+              borderRadius: '12px',
+              padding: '18px'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <h3 style={{ margin: 0 }}>Edit {lookEditorSectionName}</h3>
+              <button
+                className="btn btn-small"
+                onClick={closeLookSectionEditor}
+                disabled={lookEditorSaving}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '12px',
+                  background: '#444',
+                  border: '1px solid #666',
+                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer',
+                  opacity: lookEditorSaving ? 0.5 : 1
+                }}
+              >
+                Close
+              </button>
+            </div>
+
+            <p style={{ margin: '0 0 14px 0', color: '#aaa', fontSize: '13px' }}>
+              Rename looks and change their order for this dashboard section.
+            </p>
+
+            {lookEditorError && (
+              <div
+                style={{
+                  marginBottom: '12px',
+                  padding: '10px',
+                  borderRadius: '6px',
+                  border: '1px solid #a33',
+                  background: '#3a1f1f',
+                  color: '#ffb3b3',
+                  fontSize: '13px'
+                }}
+              >
+                {lookEditorError}
+              </div>
+            )}
+
+            {lookEditorDraft.length === 0 ? (
+              <div style={{ padding: '10px', border: '1px solid #444', borderRadius: '6px', color: '#aaa', fontSize: '13px' }}>
+                No looks found in this section.
+              </div>
+            ) : (
+              lookEditorDraft.map((lookItem, index) => (
+                <div
+                  key={lookItem.id}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '36px 1fr 84px',
+                    gap: '8px',
+                    alignItems: 'center',
+                    padding: '8px',
+                    border: '1px solid #3d3d3d',
+                    borderRadius: '6px',
+                    marginBottom: '8px',
+                    background: '#1e1e1e'
+                  }}
+                >
+                  <div style={{ textAlign: 'center', color: '#888', fontSize: '12px' }}>
+                    {index + 1}
+                  </div>
+                  <input
+                    type="text"
+                    value={lookItem.name}
+                    onChange={(e) => updateLookDraftName(lookItem.id, e.target.value)}
+                    disabled={lookEditorSaving}
+                    style={{
+                      width: '100%',
+                      background: '#111b35',
+                      border: '1px solid #3a4d76',
+                      borderRadius: '4px',
+                      color: '#f0f0f0',
+                      padding: '8px 10px',
+                      fontSize: '14px'
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn btn-small"
+                      onClick={() => moveLookDraftItem(index, -1)}
+                      disabled={lookEditorSaving || index === 0}
+                      style={{
+                        width: '36px',
+                        padding: '4px 0',
+                        fontSize: '12px',
+                        background: '#2f2f2f',
+                        border: '1px solid #555',
+                        opacity: (lookEditorSaving || index === 0) ? 0.4 : 1,
+                        cursor: (lookEditorSaving || index === 0) ? 'not-allowed' : 'pointer'
+                      }}
+                      title="Move up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      className="btn btn-small"
+                      onClick={() => moveLookDraftItem(index, 1)}
+                      disabled={lookEditorSaving || index === lookEditorDraft.length - 1}
+                      style={{
+                        width: '36px',
+                        padding: '4px 0',
+                        fontSize: '12px',
+                        background: '#2f2f2f',
+                        border: '1px solid #555',
+                        opacity: (lookEditorSaving || index === lookEditorDraft.length - 1) ? 0.4 : 1,
+                        cursor: (lookEditorSaving || index === lookEditorDraft.length - 1) ? 'not-allowed' : 'pointer'
+                      }}
+                      title="Move down"
+                    >
+                      ↓
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' }}>
+              <button
+                className="btn btn-small"
+                onClick={closeLookSectionEditor}
+                disabled={lookEditorSaving}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  background: '#444',
+                  border: '1px solid #666',
+                  opacity: lookEditorSaving ? 0.5 : 1,
+                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-small btn-primary"
+                onClick={saveLookSectionEditor}
+                disabled={lookEditorSaving}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '12px',
+                  opacity: lookEditorSaving ? 0.5 : 1,
+                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {lookEditorSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeLayout.showReturnToMenuButton !== false && (
         <button className="menu-btn" onClick={() => navigate('/dashboard')} title="Return to Menu">
