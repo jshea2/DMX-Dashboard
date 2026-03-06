@@ -15,7 +15,9 @@ const useWebSocket = () => {
       par1: { intensity: 0 },
       par2: { intensity: 0 }
     },
-    fixtureHsv: {}
+    fixtureHsv: {},
+    cuePlayback: {},
+    cueOverrides: {}
   });
 
   const [connected, setConnected] = useState(false);

@@ -67,8 +67,33 @@ function getDefaultValueForComponent(control, component) {
   } else if (defaultVal.type === 'scalar') {
     return (defaultVal.v || 0) * 100;
   } else if (defaultVal.type === 'xy') {
-    if (component.type === 'pan') return (defaultVal.x || 0.5) * 100;
-    if (component.type === 'tilt') return (defaultVal.y || 0.5) * 100;
+    const hasPanFine = control.components?.some(comp => comp.type === 'panFine');
+    const hasTiltFine = control.components?.some(comp => comp.type === 'tiltFine');
+    const panNormalized = defaultVal.x || 0.5;
+    const tiltNormalized = defaultVal.y || 0.5;
+
+    if (component.type === 'pan') {
+      if (hasPanFine) {
+        const raw = Math.round(Math.max(0, Math.min(1, panNormalized)) * 65535);
+        return ((raw >> 8) / 255) * 100;
+      }
+      return panNormalized * 100;
+    }
+    if (component.type === 'panFine') {
+      const raw = Math.round(Math.max(0, Math.min(1, panNormalized)) * 65535);
+      return ((raw & 0xff) / 255) * 100;
+    }
+    if (component.type === 'tilt') {
+      if (hasTiltFine) {
+        const raw = Math.round(Math.max(0, Math.min(1, tiltNormalized)) * 65535);
+        return ((raw >> 8) / 255) * 100;
+      }
+      return tiltNormalized * 100;
+    }
+    if (component.type === 'tiltFine') {
+      const raw = Math.round(Math.max(0, Math.min(1, tiltNormalized)) * 65535);
+      return ((raw & 0xff) / 255) * 100;
+    }
   }
 
   return 0;
@@ -89,6 +114,104 @@ function isRgbProfile(profile) {
   return profileHasChannel(profile, 'red') && 
          profileHasChannel(profile, 'green') && 
          profileHasChannel(profile, 'blue');
+}
+
+function getActiveCueSnapshots(currentState, cfg) {
+  const snapshots = [];
+  const nowMs = Date.now();
+  const cuePlayback = currentState.cuePlayback || {};
+  const cueLists = cfg.cueLists || [];
+  const layoutsById = new Map((cfg.showLayouts || []).map(layout => [layout.id, layout]));
+
+  const toPercent = (value) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return null;
+    return Math.max(0, Math.min(100, numericValue));
+  };
+
+  Object.entries(cuePlayback).forEach(([dashboardId, playback]) => {
+    if (!playback) return;
+    if (playback.status === 'stopped') return;
+    const layout = layoutsById.get(dashboardId);
+    const cueListId = playback.cueListId || layout?.cueListId;
+    if (!cueListId) return;
+    const cueList = cueLists.find(list => list.id === cueListId);
+    if (!cueList || !Array.isArray(cueList.cues) || cueList.cues.length === 0) return;
+
+    let cue = null;
+    if (playback.cueId) {
+      cue = cueList.cues.find(item => item.id === playback.cueId) || null;
+    }
+    if (!cue && Number.isInteger(playback.cueIndex) && playback.cueIndex >= 0 && playback.cueIndex < cueList.cues.length) {
+      cue = cueList.cues[playback.cueIndex];
+    }
+    if (!cue) return;
+
+    let transition = null;
+    if (playback.transition && typeof playback.transition === 'object') {
+      const durationMs = Number(playback.transition.durationMs);
+      if (Number.isFinite(durationMs) && durationMs > 0) {
+        const startedAtMs = Number.isFinite(Number(playback.transition.startedAtMs))
+          ? Number(playback.transition.startedAtMs)
+          : nowMs;
+        let progress = 0;
+        if (playback.status === 'paused') {
+          if (Number.isFinite(Number(playback.transition.pausedProgress))) {
+            progress = Number(playback.transition.pausedProgress);
+          } else {
+            const pausedAtMs = Number.isFinite(Number(playback.transition.pausedAtMs))
+              ? Number(playback.transition.pausedAtMs)
+              : nowMs;
+            progress = (pausedAtMs - startedAtMs) / durationMs;
+          }
+        } else {
+          progress = (nowMs - startedAtMs) / durationMs;
+        }
+
+        transition = {
+          fromTargets: playback.transition.fromTargets || {},
+          toTargets: playback.transition.toTargets || cue.targets || {},
+          progress: Math.max(0, Math.min(1, progress))
+        };
+      }
+    }
+
+    snapshots.push({
+      dashboardId,
+      cueListId: cueList.id,
+      cueId: cue.id,
+      targets: cue.targets || {},
+      transition
+    });
+  });
+
+  return snapshots;
+}
+
+function getCueChannelValue(snapshot, fixtureId, channelName) {
+  if (!snapshot) return null;
+
+  const toPercent = (value) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return null;
+    return Math.max(0, Math.min(100, numericValue));
+  };
+
+  if (snapshot.transition) {
+    const fromFixtureTargets = snapshot.transition.fromTargets?.[fixtureId];
+    const toFixtureTargets = snapshot.transition.toTargets?.[fixtureId]
+      || snapshot.targets?.[fixtureId];
+    const fromValue = toPercent(fromFixtureTargets?.[channelName]);
+    const toValue = toPercent(toFixtureTargets?.[channelName]);
+    if (fromValue === null && toValue === null) return null;
+    const startValue = fromValue !== null ? fromValue : (toValue ?? 0);
+    const endValue = toValue !== null ? toValue : startValue;
+    return startValue + (endValue - startValue) * snapshot.transition.progress;
+  }
+
+  const cueFixtureTargets = snapshot.targets?.[fixtureId];
+  if (!cueFixtureTargets) return null;
+  return toPercent(cueFixtureTargets[channelName]);
 }
 
 class DMXEngine {
@@ -125,6 +248,7 @@ class DMXEngine {
   computeOutput() {
     const currentState = state.get();
     const cfg = config.get();
+    const activeCueSnapshots = getActiveCueSnapshots(currentState, cfg);
 
     // Reinitialize universes in case fixtures changed
     cfg.fixtures.forEach(fixture => {
@@ -151,6 +275,7 @@ class DMXEngine {
       const universe = this.universes[universeKey];
       const profile = getProfile(cfg, fixture);
       const isFixtureOverridden = currentState.overriddenFixtures?.[fixtureId]?.active;
+      const isCueOverridden = currentState.cueOverrides?.[fixtureId]?.active;
 
       if (!universe || !profile) return;
 
@@ -191,6 +316,15 @@ class DMXEngine {
               });
             }
 
+            // Source N+: Active cue contributions (unless this fixture has cue override)
+            if (!isCueOverridden) {
+              activeCueSnapshots.forEach(snapshot => {
+                const cueValue = getCueChannelValue(snapshot, fixtureId, channelName);
+                if (cueValue === null) return;
+                sources.push(Math.round((cueValue / 100) * 255));
+              });
+            }
+
             // Apply HTP: Take the highest value
             const maxValue = Math.max(0, ...sources);
             universe[dmxAddress - 1] = clamp(maxValue, 0, 255);
@@ -228,6 +362,15 @@ class DMXEngine {
                   sources.push(Math.round((effectiveValue / 100) * 255));
                 }
               }
+            });
+          }
+
+          // Source N+: Active cue contributions (unless this fixture has cue override)
+          if (!isCueOverridden) {
+            activeCueSnapshots.forEach(snapshot => {
+              const cueValue = getCueChannelValue(snapshot, fixtureId, channelName);
+              if (cueValue === null) return;
+              sources.push(Math.round((cueValue / 100) * 255));
             });
           }
 

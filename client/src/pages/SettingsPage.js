@@ -22,7 +22,6 @@ const TABS = [
   { id: 'network', label: 'Networking / IO' },
   { id: 'profiles', label: 'Fixture Profiles' },
   { id: 'patching', label: 'Patch' },
-  { id: 'looks', label: 'Looks' },
   { id: 'cuelist', label: 'Cue List' },
   { id: 'export', label: 'Export / Import' },
 ];
@@ -41,12 +40,14 @@ const SettingsPage = () => {
   const [draggedItem, setDraggedItem] = useState(null);
   const [selectedDashboard, setSelectedDashboard] = useState('global'); // 'global' or dashboardId
   const [lastDashboardSelection, setLastDashboardSelection] = useState(null);
+  const [selectedCueListId, setSelectedCueListId] = useState(null);
 
   // Check URL query params for initial tab, or use last visited tab from localStorage
   const queryParams = new URLSearchParams(location.search);
   const tabFromUrl = queryParams.get('tab');
   const lastVisitedTab = localStorage.getItem('settings_last_tab');
-  const initialTab = tabFromUrl || lastVisitedTab || 'showlayout';
+  const requestedTab = tabFromUrl || lastVisitedTab || 'showlayout';
+  const initialTab = TABS.some(tab => tab.id === requestedTab) ? requestedTab : 'showlayout';
   const [activeTab, setActiveTab] = useState(initialTab);
   const [collapsedSections, setCollapsedSections] = useState({});
   const [collapsedProfiles, setCollapsedProfiles] = useState({});
@@ -61,6 +62,7 @@ const SettingsPage = () => {
   const [duplicateFixtureIndex, setDuplicateFixtureIndex] = useState(null);
   const [duplicateCount, setDuplicateCount] = useState(1);
   const [duplicateAddressOffset, setDuplicateAddressOffset] = useState(0);
+  const [profileJumpTargetId, setProfileJumpTargetId] = useState(null);
 
   // Tagging and filtering state
   const [fixtureTagFilter, setFixtureTagFilter] = useState('all');
@@ -72,6 +74,27 @@ const SettingsPage = () => {
   const toggleSection = (section) => {
     setCollapsedSections(prev => ({ ...prev, [section]: !prev[section] }));
   };
+
+  const jumpToFixtureProfileEditor = useCallback((profileId) => {
+    if (!profileId) return;
+    setCollapsedProfiles(prev => ({ ...prev, [profileId]: false }));
+    setActiveTab('profiles');
+    setProfileJumpTargetId(profileId);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'profiles' || !profileJumpTargetId) return;
+
+    const timeout = setTimeout(() => {
+      const profileCard = document.getElementById(`fixture-profile-${profileJumpTargetId}`);
+      if (profileCard) {
+        profileCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      setProfileJumpTargetId(null);
+    }, 0);
+
+    return () => clearTimeout(timeout);
+  }, [activeTab, profileJumpTargetId, config?.fixtureProfiles, collapsedProfiles]);
 
   // Computed values for fixture tagging and filtering
   const allFixtureTags = React.useMemo(() => {
@@ -161,6 +184,19 @@ const SettingsPage = () => {
     fetchNetworkInterfaces();
   }, []);
 
+  useEffect(() => {
+    if (!Array.isArray(config?.cueLists) || config.cueLists.length === 0) {
+      setSelectedCueListId(null);
+      return;
+    }
+    setSelectedCueListId((prevSelectedCueListId) => {
+      if (prevSelectedCueListId && config.cueLists.some((cueList) => cueList.id === prevSelectedCueListId)) {
+        return prevSelectedCueListId;
+      }
+      return config.cueLists[0].id;
+    });
+  }, [config?.cueLists]);
+
   // Separate useEffect to update fromDashboardName when config loads
   useEffect(() => {
     if (location.state?.fromDashboard && config?.showLayouts) {
@@ -193,7 +229,8 @@ const SettingsPage = () => {
       const queryParams = new URLSearchParams(window.location.search);
       const tabFromUrl = queryParams.get('tab');
       if (tabFromUrl && tabFromUrl !== activeTab) {
-        setActiveTab(tabFromUrl);
+        const nextTab = TABS.some(tab => tab.id === tabFromUrl) ? tabFromUrl : 'showlayout';
+        setActiveTab(nextTab);
       }
     };
 
@@ -402,6 +439,45 @@ const SettingsPage = () => {
       current = current[keys[i]];
     }
     current[keys[keys.length - 1]] = value;
+    setConfig(newConfig);
+  };
+
+  const selectedCueList = React.useMemo(() => {
+    if (!Array.isArray(config?.cueLists) || config.cueLists.length === 0) return null;
+    return config.cueLists.find((cueList) => cueList.id === selectedCueListId) || config.cueLists[0];
+  }, [config?.cueLists, selectedCueListId]);
+
+  const updateCueShortcutSetting = (settingKey, value) => {
+    if (!config || !selectedCueList) return;
+    const newConfig = { ...config };
+    newConfig.cueLists = (config.cueLists || []).map((cueList) => {
+      if (cueList.id !== selectedCueList.id) return cueList;
+      return {
+        ...cueList,
+        shortcuts: {
+          enableSpacebarGo: cueList.shortcuts?.enableSpacebarGo !== false,
+          enableShiftSpacebarFastGo: cueList.shortcuts?.enableShiftSpacebarFastGo === true,
+          enableOptionSpacebarBackPause: cueList.shortcuts?.enableOptionSpacebarBackPause === true,
+          [settingKey]: value
+        }
+      };
+    });
+    setConfig(newConfig);
+  };
+
+  const updateDefaultNewCueTransitionTimeSetting = (value) => {
+    if (!config || !selectedCueList) return;
+    const parsedValue = Number.parseInt(String(value), 10);
+    const normalizedValue = Number.isFinite(parsedValue) ? Math.max(0, parsedValue) : 5;
+
+    const newConfig = { ...config };
+    newConfig.cueLists = (config.cueLists || []).map((cueList) => {
+      if (cueList.id !== selectedCueList.id) return cueList;
+      return {
+        ...cueList,
+        defaultNewCueTransitionTime: normalizedValue
+      };
+    });
     setConfig(newConfig);
   };
 
@@ -771,6 +847,30 @@ const SettingsPage = () => {
       ],
       defaultValue: { type: 'scalar', v: 127 / 255 }
     },
+    'PanTilt': {
+      label: 'Pan/Tilt (8-bit, 2ch)',
+      domain: 'Position',
+      controlType: 'PanTilt',
+      channelCount: 2,
+      components: [
+        { type: 'pan', name: 'pan', offset: 0 },
+        { type: 'tilt', name: 'tilt', offset: 1 }
+      ],
+      defaultValue: { type: 'xy', x: 0.5, y: 0.5 }
+    },
+    'PanTilt16': {
+      label: 'Pan/Tilt (16-bit, 4ch)',
+      domain: 'Position',
+      controlType: 'PanTilt16',
+      channelCount: 4,
+      components: [
+        { type: 'pan', name: 'pan', offset: 0 },
+        { type: 'panFine', name: 'panFine', offset: 1 },
+        { type: 'tilt', name: 'tilt', offset: 2 },
+        { type: 'tiltFine', name: 'tiltFine', offset: 3 }
+      ],
+      defaultValue: { type: 'xy', x: 0.5, y: 0.5 }
+    },
     'DimmerRGB': {
       label: 'Dimmer + RGB (4ch)',
       controls: [
@@ -859,7 +959,7 @@ const SettingsPage = () => {
         ...comp,
         offset: currentTotalChannels + comp.offset
       })),
-      defaultValue: template.defaultValue
+      defaultValue: template.defaultValue ? { ...template.defaultValue } : null
     };
 
     profile.controls.push(newControl);
@@ -961,6 +1061,7 @@ const SettingsPage = () => {
       showReturnToMenuButton: willHaveMultipleDashboards,  // Only true if there are already other dashboards
       showSettingsButton: true,
       showConnectedUsers: true,
+      lockEdits: false,
       accessControl: {
         defaultRole: 'viewer',
         requireExplicitAccess: false  // Allow all users by default
@@ -973,11 +1074,7 @@ const SettingsPage = () => {
           staticType: 'looks',
           showClearButton: true,
           order: 0,
-          items: newConfig.looks.map((look, index) => ({
-            type: 'look',
-            id: look.id,
-            order: index
-          }))
+          items: []
         },
         {
           id: 'section-fixtures',
@@ -1024,6 +1121,11 @@ const SettingsPage = () => {
       return;
     }
 
+    // Remove looks owned by this dashboard
+    if (Array.isArray(newConfig.looks)) {
+      newConfig.looks = newConfig.looks.filter(look => look.dashboardId !== layout.id);
+    }
+
     newConfig.showLayouts.splice(index, 1);
 
     // If we deleted the active layout and it was the last one, clear activeLayoutId
@@ -1043,15 +1145,44 @@ const SettingsPage = () => {
     const newConfig = { ...config };
     const original = newConfig.showLayouts[index];
     const existingSlugs = newConfig.showLayouts.map(l => l.urlSlug);
+    const newLayoutId = `layout-${Date.now()}`;
+
+    const duplicatedLooks = (newConfig.looks || [])
+      .filter(look => look.dashboardId === original.id)
+      .map((look, lookIndex) => ({
+        ...look,
+        id: `look-${Date.now()}-${lookIndex + 1}`,
+        dashboardId: newLayoutId,
+        targets: look.targets ? JSON.parse(JSON.stringify(look.targets)) : {},
+        tags: Array.isArray(look.tags) ? [...look.tags] : []
+      }));
+
+    const lookIdMap = duplicatedLooks.reduce((acc, look, idx) => {
+      const sourceLook = (newConfig.looks || []).filter(l => l.dashboardId === original.id)[idx];
+      if (sourceLook) acc[sourceLook.id] = look.id;
+      return acc;
+    }, {});
 
     const duplicate = {
       ...original,
-      id: `layout-${Date.now()}`,
+      id: newLayoutId,
       name: `${original.name} (Copy)`,
       urlSlug: generateUrlSlug(`${original.name} Copy`, existingSlugs),
-      sections: (original.sections || []).map(section => ({ ...section }))
+      sections: (original.sections || []).map(section => ({
+        ...section,
+        items: (section.items || []).map(item => {
+          if (item?.type === 'look' && lookIdMap[item.id]) {
+            return { ...item, id: lookIdMap[item.id] };
+          }
+          return { ...item };
+        })
+      }))
     };
 
+    if (!Array.isArray(newConfig.looks)) {
+      newConfig.looks = [];
+    }
+    newConfig.looks.push(...duplicatedLooks);
     newConfig.showLayouts.splice(index + 1, 0, duplicate);
     setConfig(newConfig);
   };
@@ -2747,6 +2878,7 @@ const SettingsPage = () => {
                 return (
             <div 
               key={profile.id} 
+              id={`fixture-profile-${profile.id}`}
               className="fixture-editor" 
               style={{ position: 'relative', padding: isCollapsed ? '12px' : '16px' }}
               draggable
@@ -2923,6 +3055,82 @@ const SettingsPage = () => {
                             />
                           )}
 
+                          {/* Pan/Tilt defaults: X + Y (8-bit: 0-255, 16-bit: 0-65535) */}
+                          {(control.controlType === 'PanTilt' || control.controlType === 'PanTilt16') && (
+                            <>
+                              {(() => {
+                                const is16Bit = control.controlType === 'PanTilt16';
+                                const axisMax = is16Bit ? 65535 : 255;
+                                const defaultX = Math.round((control.defaultValue?.x ?? 0.5) * axisMax);
+                                const defaultY = Math.round((control.defaultValue?.y ?? 0.5) * axisMax);
+
+                                return (
+                                  <>
+                                    <span style={{ color: '#888', fontSize: '12px' }}>Pan</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max={axisMax}
+                                      value={defaultX}
+                                      onChange={(e) => {
+                                        const panValue = Math.max(0, Math.min(axisMax, parseInt(e.target.value, 10) || 0));
+                                        const newConfig = { ...config };
+                                        const targetControl = newConfig.fixtureProfiles[profileIndex].controls[idx];
+                                        targetControl.defaultValue = {
+                                          type: 'xy',
+                                          x: panValue / axisMax,
+                                          y: targetControl.defaultValue?.y ?? 0.5
+                                        };
+                                        setConfig(newConfig);
+                                        setHasUnsavedChanges(true);
+                                      }}
+                                      style={{
+                                        width: '84px',
+                                        padding: '6px 8px',
+                                        background: '#2a2a2a',
+                                        border: '1px solid #444',
+                                        borderRadius: '4px',
+                                        color: '#fff',
+                                        fontSize: '13px',
+                                        textAlign: 'center'
+                                      }}
+                                    />
+                                    <span style={{ color: '#888', fontSize: '12px' }}>Tilt</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      max={axisMax}
+                                      value={defaultY}
+                                      onChange={(e) => {
+                                        const tiltValue = Math.max(0, Math.min(axisMax, parseInt(e.target.value, 10) || 0));
+                                        const newConfig = { ...config };
+                                        const targetControl = newConfig.fixtureProfiles[profileIndex].controls[idx];
+                                        targetControl.defaultValue = {
+                                          type: 'xy',
+                                          x: targetControl.defaultValue?.x ?? 0.5,
+                                          y: tiltValue / axisMax
+                                        };
+                                        setConfig(newConfig);
+                                        setHasUnsavedChanges(true);
+                                      }}
+                                      style={{
+                                        width: '84px',
+                                        padding: '6px 8px',
+                                        background: '#2a2a2a',
+                                        border: '1px solid #444',
+                                        borderRadius: '4px',
+                                        color: '#fff',
+                                        fontSize: '13px',
+                                        textAlign: 'center'
+                                      }}
+                                    />
+                                    <span style={{ color: '#666', fontSize: '12px' }}>DMX ({is16Bit ? '0-65535' : '0-255'})</span>
+                                  </>
+                                );
+                              })()}
+                            </>
+                          )}
+
                           {/* Intensity/Generic: Number input (0-255) */}
                           {(control.controlType === 'Intensity' || control.controlType === 'Generic' || control.controlType === 'Zoom' || control.controlType === 'CCT' || control.controlType === 'Tint') && (
                             <>
@@ -2979,6 +3187,8 @@ const SettingsPage = () => {
                       <option value="Intensity">Intensity (1ch)</option>
                       <option value="RGB">RGB (3ch)</option>
                       <option value="RGBW">RGBW (4ch)</option>
+                      <option value="PanTilt">Pan/Tilt (8-bit, 2ch)</option>
+                      <option value="PanTilt16">Pan/Tilt (16-bit, 4ch)</option>
                       <option value="Generic">Generic (1ch)</option>
                       <option value="Zoom">Zoom (1ch)</option>
                       <option value="CCT">CCT (1ch)</option>
@@ -3315,6 +3525,14 @@ const SettingsPage = () => {
                             <option key={p.id} value={p.id}>{p.name}</option>
                           ))}
                         </select>
+                        <button
+                          className="btn btn-secondary btn-small"
+                          style={{ marginTop: '8px', width: '100%' }}
+                          onClick={() => jumpToFixtureProfileEditor(fixture.profileId)}
+                          disabled={!fixture.profileId}
+                        >
+                          Edit Fixture Profile
+                        </button>
                       </div>
 
                       <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
@@ -4165,6 +4383,16 @@ const SettingsPage = () => {
                       <label htmlFor={`showConnectedUsers-${layout.id}`}>Show Connected Users</label>
                     </div>
 
+                    <div className="form-group checkbox-group">
+                      <input
+                        type="checkbox"
+                        id={`lockEdits-${layout.id}`}
+                        checked={layout.lockEdits === true}
+                        onChange={(e) => updateShowLayout(layoutIndex, 'lockEdits', e.target.checked)}
+                      />
+                      <label htmlFor={`lockEdits-${layout.id}`}>Lock Edits for Controller/Viewer</label>
+                    </div>
+
                     {config.showLayouts && config.showLayouts.length > 1 && (
                       <div className="form-group checkbox-group">
                         <input
@@ -4723,12 +4951,91 @@ const SettingsPage = () => {
       </div>
       )}
 
-      {/* Cue List Tab (Coming Soon) */}
+      {/* Cue List Tab */}
       {activeTab === 'cuelist' && (
       <div className="card">
         <div className="settings-section">
           <h3>Cue List</h3>
-          <p style={{ color: '#888', fontStyle: 'italic' }}>Coming soon...</p>
+          {!config?.cueLists?.length && (
+            <div style={{ color: '#aaa', fontSize: '14px' }}>No cue lists are configured.</div>
+          )}
+
+          {config?.cueLists?.length > 0 && (
+            <>
+              <div className="form-group" style={{ maxWidth: '420px', marginBottom: '16px' }}>
+                <label>Select Cue List</label>
+                <select
+                  value={selectedCueList?.id || ''}
+                  onChange={(e) => setSelectedCueListId(e.target.value)}
+                >
+                  {config.cueLists.map((cueList) => (
+                    <option key={cueList.id} value={cueList.id}>
+                      {cueList.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {selectedCueList && (
+                <div
+                  style={{
+                    border: '1px solid #3f4f6a',
+                    borderRadius: '10px',
+                    padding: '14px',
+                    background: '#1c2236',
+                    maxWidth: '520px'
+                  }}
+                >
+                  <div style={{ fontSize: '14px', fontWeight: 700, color: '#dce9ff', marginBottom: '10px' }}>
+                    Keyboard Shortcuts
+                  </div>
+                  <div className="form-group checkbox-group">
+                    <input
+                      type="checkbox"
+                      id="cue-shortcut-spacebar-go"
+                      checked={selectedCueList.shortcuts?.enableSpacebarGo !== false}
+                      onChange={(e) => updateCueShortcutSetting('enableSpacebarGo', e.target.checked)}
+                    />
+                    <label htmlFor="cue-shortcut-spacebar-go">Enable Spacebar GO</label>
+                  </div>
+                  <div className="form-group checkbox-group">
+                    <input
+                      type="checkbox"
+                      id="cue-shortcut-shift-spacebar-fast-go"
+                      checked={selectedCueList.shortcuts?.enableShiftSpacebarFastGo === true}
+                      onChange={(e) => updateCueShortcutSetting('enableShiftSpacebarFastGo', e.target.checked)}
+                    />
+                    <label htmlFor="cue-shortcut-shift-spacebar-fast-go">Enable Shift-Spacebar Fast GO</label>
+                  </div>
+                  <div className="form-group checkbox-group" style={{ marginBottom: '6px' }}>
+                    <input
+                      type="checkbox"
+                      id="cue-shortcut-option-spacebar-back-pause"
+                      checked={selectedCueList.shortcuts?.enableOptionSpacebarBackPause === true}
+                      onChange={(e) => updateCueShortcutSetting('enableOptionSpacebarBackPause', e.target.checked)}
+                    />
+                    <label htmlFor="cue-shortcut-option-spacebar-back-pause">Enable Option-Spacebar for Back/Pause</label>
+                  </div>
+                  <div className="form-group" style={{ marginTop: '12px', marginBottom: '8px' }}>
+                    <label htmlFor="cue-default-new-transition-time-input">Default New Cue Transition Time (seconds)</label>
+                    <input
+                      id="cue-default-new-transition-time-input"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={Number.isFinite(Number(selectedCueList.defaultNewCueTransitionTime))
+                        ? Math.max(0, Math.round(Number(selectedCueList.defaultNewCueTransitionTime)))
+                        : 5}
+                      onChange={(e) => updateDefaultNewCueTransitionTimeSetting(e.target.value)}
+                    />
+                  </div>
+                  <small style={{ color: '#9fb0cc' }}>
+                    These shortcuts apply when a Cue List section is visible on a dashboard and text inputs are not focused.
+                  </small>
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
       )}

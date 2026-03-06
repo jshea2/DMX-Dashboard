@@ -151,6 +151,21 @@ const DEFAULT_CONFIG = {
       }
     }
   ],
+  cueLists: [
+    {
+      id: 'cue-list-main',
+      name: 'Main Cue List',
+      cueOutTime: 0,
+      backTime: 0,
+      defaultNewCueTransitionTime: 5,
+      shortcuts: {
+        enableSpacebarGo: true,
+        enableShiftSpacebarFastGo: false,
+        enableOptionSpacebarBackPause: false
+      },
+      cues: []
+    }
+  ],
   settings: {
     requirePassword: false,
     password: ''
@@ -166,29 +181,24 @@ class Config {
     try {
       if (fs.existsSync(CONFIG_FILE)) {
         const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-        let config = JSON.parse(data);
-        // Migrate to showLayouts if not present
-        config = this.ensureShowLayouts(config);
-        // Migrate layout access control fields
-        config = this.ensureLayoutAccessControl(config);
-        // Migrate tags for fixtures and looks
-        config = this.ensureTags(config);
-        // Ensure update settings
-        config = this.ensureUpdateSettings(config);
-        // Normalize control block defaults
-        config = this.ensureControlBlockDefaults(config);
-        return config;
+        return this.normalizeConfig(JSON.parse(data));
       }
     } catch (error) {
       console.error('Error loading config:', error);
     }
-    let config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
-    config = this.ensureShowLayouts(config);
-    config = this.ensureLayoutAccessControl(config);
-    config = this.ensureTags(config);
-    config = this.ensureUpdateSettings(config);
-    config = this.ensureControlBlockDefaults(config);
-    return config;
+    return this.normalizeConfig(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
+  }
+
+  normalizeConfig(config) {
+    let nextConfig = config;
+    nextConfig = this.ensureShowLayouts(nextConfig);
+    nextConfig = this.ensureLayoutAccessControl(nextConfig);
+    nextConfig = this.ensureDashboardScopedLooks(nextConfig);
+    nextConfig = this.ensureCueLists(nextConfig);
+    nextConfig = this.ensureTags(nextConfig);
+    nextConfig = this.ensureUpdateSettings(nextConfig);
+    nextConfig = this.ensureControlBlockDefaults(nextConfig);
+    return nextConfig;
   }
 
   ensureShowLayouts(config) {
@@ -268,7 +278,7 @@ class Config {
           staticType: "fixtures",
           visible: true,
           showClearButton: true,
-          order: 1,
+          order: 2,
           items: []
         };
         config.fixtures.forEach((fixture, index) => {
@@ -281,6 +291,20 @@ class Config {
           });
         });
         defaultLayout.sections.push(fixturesSection);
+      }
+
+      if (config.cueLists && config.cueLists.length > 0) {
+        defaultLayout.cueListId = config.cueLists[0].id;
+        defaultLayout.sections.push({
+          id: "section-cues",
+          name: "Cue List",
+          type: "static",
+          staticType: "cues",
+          visible: true,
+          showClearButton: true,
+          order: 1,
+          items: []
+        });
       }
 
       config.showLayouts = [defaultLayout];
@@ -425,8 +449,151 @@ class Config {
             layout.accessControl.requireExplicitAccess = false;
           }
         }
+
+        // Lock dashboard editing affordances for non-editors
+        if (layout.lockEdits === undefined) {
+          layout.lockEdits = false;
+        }
       });
     }
+
+    return config;
+  }
+
+  ensureDashboardScopedLooks(config) {
+    if (!Array.isArray(config.looks)) {
+      config.looks = [];
+      return config;
+    }
+    if (!Array.isArray(config.showLayouts) || config.showLayouts.length === 0) {
+      return config;
+    }
+
+    const layouts = config.showLayouts;
+    const firstLayoutId = layouts[0].id;
+    let lookCloneCounter = 0;
+
+    const makeLookId = () => {
+      lookCloneCounter += 1;
+      return `look-${Date.now()}-${lookCloneCounter}`;
+    };
+
+    const cloneLookForDashboard = (sourceLook, dashboardId) => {
+      const clone = {
+        ...sourceLook,
+        id: makeLookId(),
+        dashboardId,
+        targets: sourceLook.targets ? JSON.parse(JSON.stringify(sourceLook.targets)) : {},
+        tags: Array.isArray(sourceLook.tags) ? [...sourceLook.tags] : []
+      };
+      config.looks.push(clone);
+      return clone;
+    };
+
+    // Ensure each layout has a looks section
+    layouts.forEach(layout => {
+      if (!Array.isArray(layout.sections)) {
+        layout.sections = [];
+      }
+      const hasLooksSection = layout.sections.some(section => section.type === 'static' && section.staticType === 'looks');
+      if (!hasLooksSection) {
+        const nextOrder = layout.sections.length;
+        layout.sections.push({
+          id: `section-looks-${layout.id}`,
+          name: 'Looks',
+          type: 'static',
+          staticType: 'looks',
+          visible: true,
+          showClearButton: true,
+          order: nextOrder,
+          items: []
+        });
+      }
+    });
+
+    const getLooksSection = (layout) =>
+      (layout.sections || []).find(section => section.type === 'static' && section.staticType === 'looks');
+
+    const lookById = new Map(config.looks.map(look => [look.id, look]));
+    const firstUseByLookId = new Map();
+
+    // Ensure each look reference in layout sections points to a look owned by that layout
+    layouts.forEach(layout => {
+      const section = getLooksSection(layout);
+      if (!section || !Array.isArray(section.items)) return;
+
+      section.items = section.items
+        .filter(item => item && item.type === 'look' && item.id)
+        .map(item => ({ ...item }));
+
+      section.items.forEach(item => {
+        const sourceLook = lookById.get(item.id);
+        if (!sourceLook) return;
+
+        // First time we see this look, assign ownership if missing.
+        if (!firstUseByLookId.has(sourceLook.id)) {
+          firstUseByLookId.set(sourceLook.id, layout.id);
+          if (!sourceLook.dashboardId) {
+            sourceLook.dashboardId = layout.id;
+          }
+          if (sourceLook.dashboardId !== layout.id) {
+            const clone = cloneLookForDashboard(sourceLook, layout.id);
+            lookById.set(clone.id, clone);
+            item.id = clone.id;
+          }
+          return;
+        }
+
+        // Reused on another layout: clone so each dashboard owns its own look.
+        const firstLayoutForLook = firstUseByLookId.get(sourceLook.id);
+        if (firstLayoutForLook !== layout.id) {
+          const clone = cloneLookForDashboard(sourceLook, layout.id);
+          lookById.set(clone.id, clone);
+          item.id = clone.id;
+        }
+      });
+    });
+
+    // Any unowned look becomes owned by first layout.
+    config.looks.forEach(look => {
+      if (!look.dashboardId) {
+        look.dashboardId = firstLayoutId;
+      }
+    });
+
+    // Ensure each dashboard's looks section contains all and only its own looks.
+    layouts.forEach(layout => {
+      const section = getLooksSection(layout);
+      if (!section) return;
+
+      const ownedLookIds = config.looks
+        .filter(look => look.dashboardId === layout.id)
+        .map(look => look.id);
+
+      const existingItems = (section.items || [])
+        .filter(item => item && item.type === 'look')
+        .filter(item => ownedLookIds.includes(item.id));
+      const existingIds = new Set(existingItems.map(item => item.id));
+
+      ownedLookIds.forEach(lookId => {
+        if (!existingIds.has(lookId)) {
+          existingItems.push({
+            type: 'look',
+            id: lookId,
+            visible: true,
+            order: existingItems.length,
+            lookUiMode: 'slider'
+          });
+        }
+      });
+
+      // Preserve non-look items in mixed/custom sections.
+      const nonLookItems = (section.items || []).filter(item => item?.type !== 'look');
+      section.items = [...existingItems, ...nonLookItems];
+      section.items.forEach((item, index) => {
+        item.order = index;
+      });
+    });
 
     return config;
   }
@@ -452,6 +619,112 @@ class Config {
     return config;
   }
 
+  ensureCueLists(config) {
+    if (!Array.isArray(config.cueLists)) {
+      config.cueLists = [];
+    }
+
+    const sanitizeTargets = (targets) => {
+      if (!targets || typeof targets !== 'object' || Array.isArray(targets)) return {};
+      const next = {};
+      Object.entries(targets).forEach(([fixtureId, channelMap]) => {
+        if (!fixtureId || !channelMap || typeof channelMap !== 'object' || Array.isArray(channelMap)) return;
+        const sanitizedChannels = {};
+        Object.entries(channelMap).forEach(([channelName, value]) => {
+          const numeric = Number(value);
+          if (!channelName || !Number.isFinite(numeric)) return;
+          sanitizedChannels[channelName] = Math.max(0, Math.min(100, numeric));
+        });
+        next[fixtureId] = sanitizedChannels;
+      });
+      return next;
+    };
+
+    const sanitizeShortcuts = (shortcuts) => ({
+      enableSpacebarGo: shortcuts?.enableSpacebarGo !== false,
+      enableShiftSpacebarFastGo: shortcuts?.enableShiftSpacebarFastGo === true,
+      enableOptionSpacebarBackPause: shortcuts?.enableOptionSpacebarBackPause === true
+    });
+
+    config.cueLists = config.cueLists
+      .filter(cueList => cueList && cueList.id)
+      .map(cueList => ({
+        id: cueList.id,
+        name: cueList.name || 'Cue List',
+        cueOutTime: Number.isFinite(Number(cueList.cueOutTime))
+          ? Math.max(0, Math.round(Number(cueList.cueOutTime)))
+          : 0,
+        backTime: Number.isFinite(Number(cueList.backTime))
+          ? Math.max(0, Math.round(Number(cueList.backTime)))
+          : 0,
+        defaultNewCueTransitionTime: Number.isFinite(Number(cueList.defaultNewCueTransitionTime))
+          ? Math.max(0, Math.round(Number(cueList.defaultNewCueTransitionTime)))
+          : 5,
+        shortcuts: sanitizeShortcuts(cueList.shortcuts),
+        cues: Array.isArray(cueList.cues)
+          ? cueList.cues
+            .filter(cue => cue && cue.id)
+            .map((cue, index) => ({
+              id: cue.id,
+              number: cue.number != null ? String(cue.number) : String(index + 1),
+              name: cue.name || `Cue ${index + 1}`,
+              fadeTime: Number.isFinite(Number(cue.fadeTime)) ? Math.max(0, Number(cue.fadeTime)) : 0,
+              targets: sanitizeTargets(cue.targets || {})
+            }))
+          : []
+      }));
+
+    if (config.cueLists.length === 0) {
+      config.cueLists.push({
+        id: 'cue-list-main',
+        name: 'Main Cue List',
+        cueOutTime: 0,
+        backTime: 0,
+        defaultNewCueTransitionTime: 5,
+        shortcuts: sanitizeShortcuts(null),
+        cues: []
+      });
+    }
+
+    if (!Array.isArray(config.showLayouts)) return config;
+    const firstCueListId = config.cueLists[0]?.id || null;
+
+    config.showLayouts.forEach((layout) => {
+      if (layout.cueListId === undefined) {
+        layout.cueListId = firstCueListId;
+      }
+      if (layout.cueListId && !config.cueLists.some(c => c.id === layout.cueListId)) {
+        layout.cueListId = firstCueListId;
+      }
+
+      if (!Array.isArray(layout.sections)) {
+        layout.sections = [];
+      }
+
+      const hasCueSection = layout.sections.some(section => section?.type === 'static' && section?.staticType === 'cues');
+      if (!hasCueSection) {
+        layout.sections.push({
+          id: `section-cues-${layout.id}`,
+          name: 'Cue List',
+          type: 'static',
+          staticType: 'cues',
+          visible: true,
+          showClearButton: true,
+          order: layout.sections.length,
+          items: []
+        });
+      }
+
+      layout.sections.forEach((section, index) => {
+        if (section?.order === undefined) {
+          section.order = index;
+        }
+      });
+    });
+
+    return config;
+  }
+
   save() {
     try {
       ensureConfigDir();
@@ -468,12 +741,12 @@ class Config {
   }
 
   update(newConfig) {
-    this.config = newConfig;
+    this.config = this.normalizeConfig(newConfig);
     return this.save();
   }
 
   reset() {
-    this.config = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+    this.config = this.normalizeConfig(JSON.parse(JSON.stringify(DEFAULT_CONFIG)));
     return this.save();
   }
 
@@ -484,7 +757,7 @@ class Config {
   importConfig(configJson) {
     try {
       const imported = JSON.parse(configJson);
-      this.config = imported;
+      this.config = this.normalizeConfig(imported);
       return this.save();
     } catch (error) {
       console.error('Error importing config:', error);

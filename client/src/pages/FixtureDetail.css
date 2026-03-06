@@ -224,3 +224,131 @@
   color: #888;
   margin-top: 4px;
 }
+
+.pan-tilt-control-block {
+  margin-bottom: 36px;
+}
+
+.pan-tilt-stage {
+  width: min(430px, 100%);
+  margin: 0 auto;
+}
+
+.pan-tilt-readout {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #9fa7b8;
+}
+
+.pan-tilt-depth {
+  margin-left: auto;
+  color: #6f7f9a;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pan-tilt-top-slider-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.pan-tilt-top-slider-wrap label,
+.pan-tilt-side-slider-wrap label {
+  color: #9fa7b8;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pan-tilt-main-row {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 14px;
+}
+
+.pan-tilt-pad {
+  position: relative;
+  width: min(360px, calc(100% - 44px));
+  aspect-ratio: 1 / 1;
+  border: 1px solid #3d4862;
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 50%, #1f2738 0%, #161d2b 60%, #121822 100%);
+  cursor: crosshair;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.pan-tilt-pad-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(to right, rgba(123, 158, 226, 0.28) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(123, 158, 226, 0.28) 1px, transparent 1px);
+  background-size: 25% 25%;
+}
+
+.pan-tilt-pad::before,
+.pan-tilt-pad::after {
+  content: '';
+  position: absolute;
+  background: rgba(148, 180, 245, 0.45);
+}
+
+.pan-tilt-pad::before {
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  transform: translateX(-0.5px);
+}
+
+.pan-tilt-pad::after {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  transform: translateY(-0.5px);
+}
+
+.pan-tilt-pad-handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #57a0ff;
+  border: 2px solid #d9ecff;
+  box-shadow: 0 0 0 1px rgba(28, 44, 73, 0.9), 0 0 14px rgba(87, 160, 255, 0.55);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.pan-tilt-side-slider-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 26px;
+}
+
+.pan-tilt-slider {
+  accent-color: #4a90e2;
+}
+
+.pan-tilt-slider-x {
+  width: 100%;
+}
+
+.pan-tilt-slider-y {
+  -webkit-appearance: slider-vertical;
+  width: 26px;
+  height: min(360px, 100%);
+  writing-mode: bt-lr;
+}

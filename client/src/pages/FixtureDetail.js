@@ -249,6 +249,115 @@ function FixtureDetail() {
     }
   }, [state?.overriddenFixtures, fixtureId, profile]);
 
+  const getCueChannelValue = useCallback((snapshot, targetFixtureId, channelName) => {
+    const toPercent = (value) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return null;
+      return Math.max(0, Math.min(100, numeric));
+    };
+
+    if (!snapshot) return null;
+
+    if (snapshot.transition) {
+      const fromFixtureTargets = snapshot.transition.fromTargets?.[targetFixtureId];
+      const toFixtureTargets = snapshot.transition.toTargets?.[targetFixtureId]
+        || snapshot.targets?.[targetFixtureId];
+      const fromValue = toPercent(fromFixtureTargets?.[channelName]);
+      const toValue = toPercent(toFixtureTargets?.[channelName]);
+      if (fromValue === null && toValue === null) return null;
+      const startValue = fromValue !== null ? fromValue : (toValue ?? 0);
+      const endValue = toValue !== null ? toValue : startValue;
+      const progress = Math.max(0, Math.min(1, Number(snapshot.transition.progress) || 0));
+      return startValue + ((endValue - startValue) * progress);
+    }
+
+    const cueFixtureTargets = snapshot.targets?.[targetFixtureId];
+    if (!cueFixtureTargets) return null;
+    return toPercent(cueFixtureTargets[channelName]);
+  }, []);
+
+  const activeCueSnapshots = useMemo(() => {
+    if (!state || !config) return [];
+
+    const nowMs = Date.now();
+    const cuePlaybackByDashboard = state?.cuePlayback || {};
+    const cueLists = config?.cueLists || [];
+    const layoutsById = new Map((config?.showLayouts || []).map(layout => [layout.id, layout]));
+    const snapshots = [];
+
+    Object.entries(cuePlaybackByDashboard).forEach(([dashboardKey, playback]) => {
+      if (!playback || playback.status === 'stopped') return;
+
+      const layout = layoutsById.get(dashboardKey);
+      const cueListId = playback.cueListId || layout?.cueListId;
+      if (!cueListId) return;
+      const cueList = cueLists.find(list => list.id === cueListId);
+      if (!cueList || !Array.isArray(cueList.cues) || cueList.cues.length === 0) return;
+
+      let cue = null;
+      if (playback.cueId) {
+        cue = cueList.cues.find(item => item.id === playback.cueId) || null;
+      }
+      if (!cue && Number.isInteger(playback.cueIndex) && playback.cueIndex >= 0 && playback.cueIndex < cueList.cues.length) {
+        cue = cueList.cues[playback.cueIndex];
+      }
+      if (!cue) return;
+
+      let transition = null;
+      if (playback.transition && typeof playback.transition === 'object') {
+        const durationMs = Number(playback.transition.durationMs);
+        if (Number.isFinite(durationMs) && durationMs > 0) {
+          const startedAtMs = Number.isFinite(Number(playback.transition.startedAtMs))
+            ? Number(playback.transition.startedAtMs)
+            : nowMs;
+          let progress = 0;
+          if (playback.status === 'paused') {
+            if (Number.isFinite(Number(playback.transition.pausedProgress))) {
+              progress = Number(playback.transition.pausedProgress);
+            } else {
+              const pausedAtMs = Number.isFinite(Number(playback.transition.pausedAtMs))
+                ? Number(playback.transition.pausedAtMs)
+                : nowMs;
+              progress = (pausedAtMs - startedAtMs) / durationMs;
+            }
+          } else {
+            progress = (nowMs - startedAtMs) / durationMs;
+          }
+
+          transition = {
+            fromTargets: playback.transition.fromTargets || {},
+            toTargets: playback.transition.toTargets || cue.targets || {},
+            progress: Math.max(0, Math.min(1, progress))
+          };
+        }
+      }
+
+      snapshots.push({
+        dashboardId: dashboardKey,
+        cueListId,
+        cueId: cue.id,
+        targets: cue.targets || {},
+        transition
+      });
+    });
+
+    return snapshots;
+  }, [state, config]);
+
+  const activeCueForFixture = useMemo(() => {
+    for (const snapshot of activeCueSnapshots) {
+      const hasCueTargets = Boolean(snapshot?.targets?.[fixtureId]);
+      const hasTransitionTargets = Boolean(snapshot?.transition?.toTargets?.[fixtureId] || snapshot?.transition?.fromTargets?.[fixtureId]);
+      if (!hasCueTargets && !hasTransitionTargets) continue;
+      return {
+        dashboardId: snapshot.dashboardId,
+        cueListId: snapshot.cueListId,
+        cueId: snapshot.cueId
+      };
+    }
+    return null;
+  }, [activeCueSnapshots, fixtureId]);
+
   // Compute HTP metadata for this fixture's channels
   const { metadata: htpMetadata, channelsToRelease } = useMemo(() => {
     const metadata = {}; // { channelName: { contributors: [], displayValue: number, isOverridden, isFrozen } }
@@ -289,8 +398,33 @@ function FixtureDetail() {
       } else if (defaultVal.type === 'scalar') {
         return (defaultVal.v || 0) * 100;
       } else if (defaultVal.type === 'xy') {
-        if (component.type === 'pan') return (defaultVal.x || 0.5) * 100;
-        if (component.type === 'tilt') return (defaultVal.y || 0.5) * 100;
+        const hasPanFine = control.components?.some(comp => comp.type === 'panFine');
+        const hasTiltFine = control.components?.some(comp => comp.type === 'tiltFine');
+        const panNormalized = defaultVal.x || 0.5;
+        const tiltNormalized = defaultVal.y || 0.5;
+
+        if (component.type === 'pan') {
+          if (hasPanFine) {
+            const raw = Math.round(Math.max(0, Math.min(1, panNormalized)) * 65535);
+            return ((raw >> 8) / 255) * 100;
+          }
+          return panNormalized * 100;
+        }
+        if (component.type === 'panFine') {
+          const raw = Math.round(Math.max(0, Math.min(1, panNormalized)) * 65535);
+          return ((raw & 0xff) / 255) * 100;
+        }
+        if (component.type === 'tilt') {
+          if (hasTiltFine) {
+            const raw = Math.round(Math.max(0, Math.min(1, tiltNormalized)) * 65535);
+            return ((raw >> 8) / 255) * 100;
+          }
+          return tiltNormalized * 100;
+        }
+        if (component.type === 'tiltFine') {
+          const raw = Math.round(Math.max(0, Math.min(1, tiltNormalized)) * 65535);
+          return ((raw & 0xff) / 255) * 100;
+        }
       }
 
       return 0;
@@ -311,6 +445,8 @@ function FixtureDetail() {
     channelNames.forEach(channelName => {
       const sources = [];
       const lookContributors = [];
+      const serverOverride = state?.overriddenFixtures?.[fixtureId];
+      const cueOverride = state?.cueOverrides?.[fixtureId];
 
       // Source 1: Direct fixture control
       if (fixtureState && fixtureState[channelName] > 0) {
@@ -351,8 +487,22 @@ function FixtureDetail() {
         }
       });
 
-      // Check if this channel is overridden (user manually adjusted while look active)
-      if (channelOverrides[channelName]) {
+      // Source N+: Active cue values (unless this fixture has an active cue override)
+      if (!cueOverride?.active) {
+        activeCueSnapshots.forEach(snapshot => {
+          const cueValue = getCueChannelValue(snapshot, fixtureId, channelName);
+          if (cueValue === null) return;
+          sources.push({
+            type: 'cue',
+            value: cueValue,
+            cueId: snapshot.cueId,
+            color: 'cue'
+          });
+        });
+      }
+
+      // Check if this channel is overridden (local override, server look override, or cue override)
+      if (channelOverrides[channelName] || serverOverride?.active || cueOverride?.active) {
         // Override mode: use direct fixture value
         // For contributors, use overriddenLooks if current lookContributors is empty
         // (because looks were zeroed out when entering override mode)
@@ -435,7 +585,19 @@ function FixtureDetail() {
     });
 
     return { metadata, channelsToRelease };
-  }, [profile, state, config, channelOverrides, frozenChannels, overriddenLooks, manuallyAdjusted, fixtureId, fixtureState]);
+  }, [
+    profile,
+    state,
+    config,
+    channelOverrides,
+    frozenChannels,
+    overriddenLooks,
+    manuallyAdjusted,
+    fixtureId,
+    fixtureState,
+    activeCueSnapshots,
+    getCueChannelValue
+  ]);
 
   // Keep HSV cache in sync with current RGB display (looks/HTP) when not manually adjusted
   useEffect(() => {
@@ -547,9 +709,23 @@ function FixtureDetail() {
           updates[comp.name] = (defaultVal.v || 0) * 100;
         });
       } else if (defaultVal.type === 'xy') {
+        const hasPanFine = control.components?.some(comp => comp.type === 'panFine');
+        const hasTiltFine = control.components?.some(comp => comp.type === 'tiltFine');
+        const panNormalized = defaultVal.x || 0.5;
+        const tiltNormalized = defaultVal.y || 0.5;
+        const panRaw = Math.round(Math.max(0, Math.min(1, panNormalized)) * 65535);
+        const tiltRaw = Math.round(Math.max(0, Math.min(1, tiltNormalized)) * 65535);
+
         control.components.forEach(comp => {
-          if (comp.type === 'pan') updates[comp.name] = (defaultVal.x || 0.5) * 100;
-          else if (comp.type === 'tilt') updates[comp.name] = (defaultVal.y || 0.5) * 100;
+          if (comp.type === 'pan') {
+            updates[comp.name] = hasPanFine ? (((panRaw >> 8) / 255) * 100) : (panNormalized * 100);
+          } else if (comp.type === 'panFine') {
+            updates[comp.name] = ((panRaw & 0xff) / 255) * 100;
+          } else if (comp.type === 'tilt') {
+            updates[comp.name] = hasTiltFine ? (((tiltRaw >> 8) / 255) * 100) : (tiltNormalized * 100);
+          } else if (comp.type === 'tiltFine') {
+            updates[comp.name] = ((tiltRaw & 0xff) / 255) * 100;
+          }
         });
       }
     }
@@ -642,6 +818,70 @@ function FixtureDetail() {
     });
     return Object.values(activeById);
   }, [htpMetadata, state.looks]);
+
+  const applyFixtureChannelUpdates = useCallback((channelUpdates = {}, options = {}) => {
+    const updateKeys = Object.keys(channelUpdates || {});
+    if (updateKeys.length === 0 && !options.fixtureHsvPayload) return;
+
+    const activeLooksForFixture = getActiveLooksForFixture();
+    const hasActiveLooks = activeLooksForFixture.length > 0;
+    const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
+    const hasActiveCue = Boolean(activeCueForFixture);
+    const isCueAlreadyOverridden = Boolean(state?.cueOverrides?.[fixtureId]?.active);
+
+    const shouldSnapshotForLook = hasActiveLooks && !isFixtureAlreadyOverridden;
+    const shouldSnapshotForCue = hasActiveCue && !isCueAlreadyOverridden;
+    const fixtureValues = (shouldSnapshotForLook || shouldSnapshotForCue)
+      ? buildOverrideFixtureValues(channelUpdates)
+      : channelUpdates;
+
+    if (hasActiveLooks || hasActiveCue) {
+      setChannelOverrides(prev => {
+        const next = { ...prev };
+        updateKeys.forEach(key => {
+          next[key] = true;
+        });
+        return next;
+      });
+    }
+
+    if (hasActiveLooks) {
+      setOverriddenLooks(activeLooksForFixture);
+    }
+
+    sendFixtureUpdate({
+      fixtures: {
+        [fixtureId]: fixtureValues
+      },
+      ...(options.fixtureHsvPayload ? { fixtureHsv: options.fixtureHsvPayload } : {}),
+      ...(hasActiveLooks ? {
+        overriddenFixtures: {
+          [fixtureId]: {
+            active: true,
+            looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
+          }
+        }
+      } : {}),
+      ...(hasActiveCue ? {
+        cueOverrides: {
+          [fixtureId]: {
+            active: true,
+            dashboardId: activeCueForFixture.dashboardId,
+            cueListId: activeCueForFixture.cueListId,
+            cueId: activeCueForFixture.cueId
+          }
+        }
+      } : {})
+    });
+  }, [
+    getActiveLooksForFixture,
+    state?.overriddenFixtures,
+    state?.cueOverrides,
+    fixtureId,
+    activeCueForFixture,
+    buildOverrideFixtureValues,
+    sendFixtureUpdate
+  ]);
 
   const buildAttributeClipboardPayload = useCallback(() => {
     if (!profile?.controls) return null;
@@ -784,13 +1024,6 @@ function FixtureDetail() {
       return next;
     });
 
-    const activeLooksForFixture = getActiveLooksForFixture();
-    const hasActiveLooks = activeLooksForFixture.length > 0;
-    const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
-    const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
-      ? buildOverrideFixtureValues(updates)
-      : updates;
-
     let fixtureHsvPayload;
     const rgbControl = profile.controls.find(c => c.controlType === 'RGB' || c.controlType === 'RGBW');
     const redComp = rgbControl?.components?.find(c => c.type === 'red');
@@ -805,34 +1038,10 @@ function FixtureDetail() {
       fixtureHsvPayload = { [fixtureId]: nextHsv };
     }
 
-    if (hasActiveLooks) {
-      setChannelOverrides(prev => {
-        const next = { ...prev };
-        updateKeys.forEach(key => {
-          next[key] = true;
-        });
-        return next;
-      });
-      setOverriddenLooks(activeLooksForFixture);
-    }
-
-    sendFixtureUpdate({
-      fixtures: {
-        [fixtureId]: fixtureValues
-      },
-      ...(fixtureHsvPayload ? { fixtureHsv: fixtureHsvPayload } : {}),
-      ...(hasActiveLooks ? {
-        overriddenFixtures: {
-          [fixtureId]: {
-            active: true,
-            looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-          }
-        }
-      } : {})
-    });
+    applyFixtureChannelUpdates(updates, { fixtureHsvPayload });
 
     setCopyPasteStatus(`Pasted to ${fixture?.name || fixtureId}`);
-  }, [profile, getActiveLooksForFixture, state?.overriddenFixtures, fixtureId, buildOverrideFixtureValues, htpMetadata, fixtureState, setFixtureHsv, sendFixtureUpdate, fixture]);
+  }, [profile, applyFixtureChannelUpdates, htpMetadata, fixtureState, setFixtureHsv, fixtureId, fixture]);
 
   const handlePasteAttributes = useCallback(() => {
     const clipboard = attributeClipboard || readAttributeClipboard();
@@ -849,10 +1058,11 @@ function FixtureDetail() {
     if (!profile) return;
 
     const hasActiveLook = getActiveLooksForFixture().length > 0;
+    const hasActiveCue = Boolean(activeCueForFixture);
 
     const updates = {};
-    if (hasActiveLook) {
-      // Allow looks to take control by zeroing direct values
+    if (hasActiveLook || hasActiveCue) {
+      // Allow looks/cues to take control by zeroing direct values
       if (profile.controls) {
         profile.controls.forEach(control => {
           control.components?.forEach(comp => {
@@ -872,7 +1082,8 @@ function FixtureDetail() {
     sendFixtureUpdate({
       fixtures: { [fixtureId]: updates },
       fixtureHsv: { [fixtureId]: { h: 0, s: 0, v: 100 } },
-      overriddenFixtures: { [fixtureId]: null } // Clear the override
+      overriddenFixtures: { [fixtureId]: null }, // Clear look override
+      cueOverrides: { [fixtureId]: null } // Clear cue override
     });
 
     // Clear overrides, manual adjustments, frozen channels, and overridden looks
@@ -980,56 +1191,16 @@ function FixtureDetail() {
           return updated;
         });
 
-        const activeLooksForFixture = getActiveLooksForFixture();
-        const hasActiveLooks = activeLooksForFixture.length > 0;
-        const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
         const rgbChannelUpdates = {
           [redComp.name]: normalizedRgb.r,
           [greenComp.name]: normalizedRgb.g,
           [blueComp.name]: normalizedRgb.b
         };
-        const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
-          ? buildOverrideFixtureValues(rgbChannelUpdates)
-          : rgbChannelUpdates;
-
-        if (hasActiveLooks) {
-          setChannelOverrides(prev => ({
-            ...prev,
-            [redComp.name]: true,
-            [greenComp.name]: true,
-            [blueComp.name]: true
-          }));
-
-          // Save the contributing looks for grey dot display
-          setOverriddenLooks(activeLooksForFixture);
-
-          // Don't zero out looks - just mark fixture as overridden
-          // The override state will make HTP ignore looks for this fixture
-          sendFixtureUpdate({
-            fixtures: {
-              [fixtureId]: fixtureValues
-            },
-            fixtureHsv: {
-              [fixtureId]: hsvValue
-            },
-            overriddenFixtures: {
-              [fixtureId]: {
-                active: true,
-                looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-              }
-            }
-          });
-        } else {
-          // No override - normal update
-          sendFixtureUpdate({
-            fixtures: {
-              [fixtureId]: fixtureValues
-            },
-            fixtureHsv: {
-              [fixtureId]: hsvValue
-            }
-          });
-        }
+        applyFixtureChannelUpdates(rgbChannelUpdates, {
+          fixtureHsvPayload: {
+            [fixtureId]: hsvValue
+          }
+        });
       };
 
       const applyHsvChange = (h, s, v) => {
@@ -1233,6 +1404,193 @@ function FixtureDetail() {
           )}
         </div>
       );
+    } else if (control.controlType === 'PanTilt' || control.controlType === 'PanTilt16') {
+      const is16Bit = control.controlType === 'PanTilt16';
+      const axisMax = is16Bit ? 65535 : 255;
+      const panComp = control.components.find(c => c.type === 'pan');
+      const tiltComp = control.components.find(c => c.type === 'tilt');
+      const panFineComp = control.components.find(c => c.type === 'panFine');
+      const tiltFineComp = control.components.find(c => c.type === 'tiltFine');
+      if (!panComp || !tiltComp) return null;
+
+      const panMeta = htpMetadata[panComp.name] || { displayValue: 0 };
+      const tiltMeta = htpMetadata[tiltComp.name] || { displayValue: 0 };
+      const panFineMeta = panFineComp ? (htpMetadata[panFineComp.name] || { displayValue: 0 }) : { displayValue: 0 };
+      const tiltFineMeta = tiltFineComp ? (htpMetadata[tiltFineComp.name] || { displayValue: 0 }) : { displayValue: 0 };
+
+      const percentToByte = (value) => {
+        const normalized = Math.max(0, Math.min(100, value || 0)) / 100;
+        return Math.round(normalized * 255);
+      };
+
+      const byteToPercent = (value) => (Math.max(0, Math.min(255, value)) / 255) * 100;
+      const clamp01 = (value) => Math.max(0, Math.min(1, value));
+
+      const panNormalized = (() => {
+        if (!is16Bit) return clamp01((panMeta.displayValue || 0) / 100);
+        const coarse = percentToByte(panMeta.displayValue || 0);
+        const fine = percentToByte(panFineMeta.displayValue || 0);
+        return ((coarse << 8) | fine) / 65535;
+      })();
+
+      const tiltNormalized = (() => {
+        if (!is16Bit) return clamp01((tiltMeta.displayValue || 0) / 100);
+        const coarse = percentToByte(tiltMeta.displayValue || 0);
+        const fine = percentToByte(tiltFineMeta.displayValue || 0);
+        return ((coarse << 8) | fine) / 65535;
+      })();
+
+      const panAxisValue = Math.round(panNormalized * axisMax);
+      const tiltAxisValue = Math.round(tiltNormalized * axisMax);
+      const touchedChannels = [
+        panComp.name,
+        ...(panFineComp ? [panFineComp.name] : []),
+        tiltComp.name,
+        ...(tiltFineComp ? [tiltFineComp.name] : [])
+      ];
+
+      const buildPanTiltUpdates = (nextPanNormalized, nextTiltNormalized) => {
+        const panNorm = clamp01(nextPanNormalized);
+        const tiltNorm = clamp01(nextTiltNormalized);
+        const updates = {};
+
+        if (is16Bit) {
+          const panRaw = Math.round(panNorm * 65535);
+          const tiltRaw = Math.round(tiltNorm * 65535);
+          updates[panComp.name] = byteToPercent((panRaw >> 8) & 0xff);
+          updates[tiltComp.name] = byteToPercent((tiltRaw >> 8) & 0xff);
+          if (panFineComp) updates[panFineComp.name] = byteToPercent(panRaw & 0xff);
+          if (tiltFineComp) updates[tiltFineComp.name] = byteToPercent(tiltRaw & 0xff);
+        } else {
+          updates[panComp.name] = panNorm * 100;
+          updates[tiltComp.name] = tiltNorm * 100;
+        }
+
+        return updates;
+      };
+
+      const applyPanTilt = (nextPanNormalized, nextTiltNormalized) => {
+        const channelUpdates = buildPanTiltUpdates(nextPanNormalized, nextTiltNormalized);
+
+        setManuallyAdjusted(prev => {
+          const updated = { ...prev };
+          touchedChannels.forEach(channelName => {
+            updated[channelName] = true;
+          });
+          return updated;
+        });
+
+        setFrozenChannels(prev => {
+          const updated = { ...prev };
+          let changed = false;
+          touchedChannels.forEach(channelName => {
+            if (updated[channelName] !== undefined) {
+              delete updated[channelName];
+              changed = true;
+            }
+          });
+          return changed ? updated : prev;
+        });
+
+        applyFixtureChannelUpdates(channelUpdates);
+      };
+
+      const handlePanSliderChange = (value) => {
+        applyPanTilt(Math.max(0, Math.min(axisMax, value)) / axisMax, tiltNormalized);
+      };
+
+      const handleTiltSliderChange = (value) => {
+        applyPanTilt(panNormalized, Math.max(0, Math.min(axisMax, value)) / axisMax);
+      };
+
+      const handlePadPointerDown = (event) => {
+        event.preventDefault();
+        const element = event.currentTarget;
+
+        const applyFromPointer = (pointerEvent) => {
+          const rect = element.getBoundingClientRect();
+          const pan = clamp01((pointerEvent.clientX - rect.left) / rect.width);
+          const tilt = clamp01(1 - ((pointerEvent.clientY - rect.top) / rect.height));
+          applyPanTilt(pan, tilt);
+        };
+
+        applyFromPointer(event);
+        if (element.setPointerCapture) {
+          element.setPointerCapture(event.pointerId);
+        }
+
+        const handleMove = (moveEvent) => applyFromPointer(moveEvent);
+        const handleEnd = (endEvent) => {
+          element.removeEventListener('pointermove', handleMove);
+          element.removeEventListener('pointerup', handleEnd);
+          element.removeEventListener('pointercancel', handleEnd);
+          if (element.releasePointerCapture) {
+            try {
+              element.releasePointerCapture(endEvent.pointerId);
+            } catch (err) {
+              // no-op
+            }
+          }
+        };
+
+        element.addEventListener('pointermove', handleMove);
+        element.addEventListener('pointerup', handleEnd);
+        element.addEventListener('pointercancel', handleEnd);
+      };
+
+      return (
+        <div key={control.id} className="control-block pan-tilt-control-block">
+          <h3>{control.label}</h3>
+          <div className="pan-tilt-stage">
+            <div className="pan-tilt-readout">
+              <span>X: {panAxisValue}</span>
+              <span>Y: {tiltAxisValue}</span>
+              <span className="pan-tilt-depth">{is16Bit ? '16-bit' : '8-bit'}</span>
+            </div>
+
+            <div className="pan-tilt-top-slider-wrap">
+              <label htmlFor={`${control.id}-pan-slider`}>Pan</label>
+              <input
+                id={`${control.id}-pan-slider`}
+                type="range"
+                min={0}
+                max={axisMax}
+                step={1}
+                value={panAxisValue}
+                className="pan-tilt-slider pan-tilt-slider-x"
+                onChange={(e) => handlePanSliderChange(parseInt(e.target.value, 10) || 0)}
+              />
+            </div>
+
+            <div className="pan-tilt-main-row">
+              <div className="pan-tilt-pad" onPointerDown={handlePadPointerDown}>
+                <div className="pan-tilt-pad-grid" />
+                <div
+                  className="pan-tilt-pad-handle"
+                  style={{
+                    left: `${panNormalized * 100}%`,
+                    top: `${(1 - tiltNormalized) * 100}%`
+                  }}
+                />
+              </div>
+
+              <div className="pan-tilt-side-slider-wrap">
+                <label htmlFor={`${control.id}-tilt-slider`}>Tilt</label>
+                <input
+                  id={`${control.id}-tilt-slider`}
+                  type="range"
+                  min={0}
+                  max={axisMax}
+                  step={1}
+                  value={tiltAxisValue}
+                  className="pan-tilt-slider pan-tilt-slider-y"
+                  onChange={(e) => handleTiltSliderChange(parseInt(e.target.value, 10) || 0)}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      );
     } else if (control.controlType === 'Intensity' || control.controlType === 'Generic') {
       // Single slider
       const comp = control.components[0];
@@ -1260,43 +1618,11 @@ function FixtureDetail() {
                 return prev;
               });
 
-              const activeLooksForFixture = getActiveLooksForFixture();
-
-              const hasActiveLooks = activeLooksForFixture.length > 0;
-              const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
+              const hasActiveLooks = getActiveLooksForFixture().length > 0;
               const seededRgbChannels = (!hasActiveLooks && control.controlType === 'Intensity')
                 ? (getStrictDimmerRgbSeed(val) || {})
                 : {};
-              const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
-                ? buildOverrideFixtureValues({ [comp.name]: val, ...seededRgbChannels })
-                : { [comp.name]: val, ...seededRgbChannels };
-
-              if (hasActiveLooks) {
-                setChannelOverrides(prev => ({ ...prev, [comp.name]: true }));
-
-                // Save the contributing looks for grey dot display
-                setOverriddenLooks(activeLooksForFixture);
-
-                // Don't zero out looks - just mark fixture as overridden
-                sendFixtureUpdate({
-                  fixtures: {
-                    [fixtureId]: fixtureValues
-                  },
-                  overriddenFixtures: {
-                    [fixtureId]: {
-                      active: true,
-                      looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-                    }
-                  }
-                });
-              } else {
-                // No override - normal update
-                sendFixtureUpdate({
-                  fixtures: {
-                    [fixtureId]: fixtureValues
-                  }
-                });
-              }
+              applyFixtureChannelUpdates({ [comp.name]: val, ...seededRgbChannels });
             }}
             label=""
             color="intensity"
@@ -1344,40 +1670,7 @@ function FixtureDetail() {
                 return prev;
               });
 
-              const activeLooksForFixture = getActiveLooksForFixture();
-
-              const hasActiveLooks = activeLooksForFixture.length > 0;
-              const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
-              const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
-                ? buildOverrideFixtureValues({ [comp.name]: scaledValue })
-                : { [comp.name]: scaledValue };
-
-              if (hasActiveLooks) {
-                setChannelOverrides(prev => ({ ...prev, [comp.name]: true }));
-
-                // Save the contributing looks for grey dot display
-                setOverriddenLooks(activeLooksForFixture);
-
-                // Don't zero out looks - just mark fixture as overridden
-                sendFixtureUpdate({
-                  fixtures: {
-                    [fixtureId]: fixtureValues
-                  },
-                  overriddenFixtures: {
-                    [fixtureId]: {
-                      active: true,
-                      looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-                    }
-                  }
-                });
-              } else {
-                // No override - normal update
-                sendFixtureUpdate({
-                  fixtures: {
-                    [fixtureId]: fixtureValues
-                  }
-                });
-              }
+              applyFixtureChannelUpdates({ [comp.name]: scaledValue });
             }}
             label=""
             color="intensity"
@@ -1423,40 +1716,7 @@ function FixtureDetail() {
                 return prev;
               });
 
-              const activeLooksForFixture = getActiveLooksForFixture();
-
-              const hasActiveLooks = activeLooksForFixture.length > 0;
-              const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
-              const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
-                ? buildOverrideFixtureValues({ [comp.name]: scaledValue })
-                : { [comp.name]: scaledValue };
-
-              if (hasActiveLooks) {
-                setChannelOverrides(prev => ({ ...prev, [comp.name]: true }));
-
-                // Save the contributing looks for grey dot display
-                setOverriddenLooks(activeLooksForFixture);
-
-                // Don't zero out looks - just mark fixture as overridden
-                sendFixtureUpdate({
-                  fixtures: {
-                    [fixtureId]: fixtureValues
-                  },
-                  overriddenFixtures: {
-                    [fixtureId]: {
-                      active: true,
-                      looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-                    }
-                  }
-                });
-              } else {
-                // No override - normal update
-                sendFixtureUpdate({
-                  fixtures: {
-                    [fixtureId]: fixtureValues
-                  }
-                });
-              }
+              applyFixtureChannelUpdates({ [comp.name]: scaledValue });
             }}
             label=""
             lookContributors={[]} // No colored outline from looks
@@ -1495,40 +1755,7 @@ function FixtureDetail() {
                     return prev;
                   });
 
-                  const activeLooksForFixture = getActiveLooksForFixture();
-
-                  const hasActiveLooks = activeLooksForFixture.length > 0;
-                  const isFixtureAlreadyOverridden = Boolean(state?.overriddenFixtures?.[fixtureId]?.active);
-                  const fixtureValues = (hasActiveLooks && !isFixtureAlreadyOverridden)
-                    ? buildOverrideFixtureValues({ [comp.name]: val })
-                    : { [comp.name]: val };
-
-                  if (hasActiveLooks) {
-                    setChannelOverrides(prev => ({ ...prev, [comp.name]: true }));
-
-                    // Save the contributing looks for grey dot display
-                    setOverriddenLooks(activeLooksForFixture);
-
-                    // Don't zero out looks - just mark fixture as overridden
-                    sendFixtureUpdate({
-                      fixtures: {
-                        [fixtureId]: fixtureValues
-                      },
-                      overriddenFixtures: {
-                        [fixtureId]: {
-                          active: true,
-                          looks: activeLooksForFixture.map(l => ({ id: l.id, color: l.color }))
-                        }
-                      }
-                    });
-                  } else {
-                    // No override - normal update
-                    sendFixtureUpdate({
-                      fixtures: {
-                        [fixtureId]: fixtureValues
-                      }
-                    });
-                  }
+                  applyFixtureChannelUpdates({ [comp.name]: val });
                 }}
                 label={comp.name}
                 lookContributors={[]} // No colored outline from looks

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 
 const Slider = ({
   label,
@@ -19,6 +19,58 @@ const Slider = ({
   customTrackGradient = null // Optional: custom gradient string for track (e.g., 'linear-gradient(to right, #000, rgb(255,0,0))')
 }) => {
   const displayValue = unit === '°' ? Math.round(value) : Math.round(value);
+  const [isEditingValue, setIsEditingValue] = useState(false);
+  const [inputValue, setInputValue] = useState(String(displayValue));
+
+  useEffect(() => {
+    if (!isEditingValue) {
+      setInputValue(String(displayValue));
+    }
+  }, [displayValue, isEditingValue]);
+
+  const getStepPrecision = (stepValue) => {
+    if (!Number.isFinite(stepValue) || stepValue <= 0) return 0;
+    const stepText = stepValue.toString();
+    if (stepText.includes('e-')) {
+      const parts = stepText.split('e-');
+      return parseInt(parts[1], 10) || 0;
+    }
+    const dotIndex = stepText.indexOf('.');
+    return dotIndex >= 0 ? (stepText.length - dotIndex - 1) : 0;
+  };
+
+  const clampAndSnap = (rawValue) => {
+    if (!Number.isFinite(rawValue)) return null;
+    let nextValue = Math.max(min, Math.min(max, rawValue));
+    const validStep = Number.isFinite(step) && step > 0 ? step : 0;
+    if (validStep > 0) {
+      const precision = getStepPrecision(validStep);
+      nextValue = min + (Math.round((nextValue - min) / validStep) * validStep);
+      nextValue = Number(nextValue.toFixed(precision));
+      nextValue = Math.max(min, Math.min(max, nextValue));
+    }
+    return nextValue;
+  };
+
+  const startEditingValue = () => {
+    if (disabled) return;
+    setInputValue(String(displayValue));
+    setIsEditingValue(true);
+  };
+
+  const cancelEditingValue = () => {
+    setIsEditingValue(false);
+    setInputValue(String(displayValue));
+  };
+
+  const commitEditingValue = () => {
+    const parsed = parseFloat(inputValue);
+    const snappedValue = clampAndSnap(parsed);
+    if (snappedValue !== null && snappedValue !== value) {
+      onChange(snappedValue);
+    }
+    setIsEditingValue(false);
+  };
 
   // Color mapping for look colors and channel colors
   const colorMap = {
@@ -170,7 +222,38 @@ const Slider = ({
     <div className="slider-group">
       <div className="slider-label">
         <span>{label}</span>
-        <span>{displayValue}{unit}</span>
+        {isEditingValue ? (
+          <input
+            type="number"
+            className="slider-value-input"
+            min={min}
+            max={max}
+            step={step}
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onBlur={commitEditingValue}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitEditingValue();
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelEditingValue();
+              }
+            }}
+            autoFocus
+          />
+        ) : (
+          <button
+            type="button"
+            className="slider-value-button"
+            onClick={startEditingValue}
+            disabled={disabled}
+            title={disabled ? '' : 'Click to type a value'}
+          >
+            {displayValue}{unit}
+          </button>
+        )}
       </div>
       <input
         type="range"

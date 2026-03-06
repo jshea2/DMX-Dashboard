@@ -42,9 +42,23 @@ function generateDefaultState() {
               fixtures[fixture.id][comp.name] = (dv.v || 0) * 100;
             });
           } else if (dv.type === 'xy') {
+            const hasPanFine = control.components?.some(comp => comp.type === 'panFine');
+            const hasTiltFine = control.components?.some(comp => comp.type === 'tiltFine');
+            const panNormalized = dv.x || 0.5;
+            const tiltNormalized = dv.y || 0.5;
+            const panRaw = Math.round(Math.max(0, Math.min(1, panNormalized)) * 65535);
+            const tiltRaw = Math.round(Math.max(0, Math.min(1, tiltNormalized)) * 65535);
+
             control.components.forEach(comp => {
-              if (comp.type === 'pan') fixtures[fixture.id][comp.name] = (dv.x || 0.5) * 100;
-              else if (comp.type === 'tilt') fixtures[fixture.id][comp.name] = (dv.y || 0.5) * 100;
+              if (comp.type === 'pan') {
+                fixtures[fixture.id][comp.name] = hasPanFine ? (((panRaw >> 8) / 255) * 100) : (panNormalized * 100);
+              } else if (comp.type === 'panFine') {
+                fixtures[fixture.id][comp.name] = ((panRaw & 0xff) / 255) * 100;
+              } else if (comp.type === 'tilt') {
+                fixtures[fixture.id][comp.name] = hasTiltFine ? (((tiltRaw >> 8) / 255) * 100) : (tiltNormalized * 100);
+              } else if (comp.type === 'tiltFine') {
+                fixtures[fixture.id][comp.name] = ((tiltRaw & 0xff) / 255) * 100;
+              }
             });
           }
         } else {
@@ -76,7 +90,27 @@ function generateDefaultState() {
     looks[look.id] = 0;
   });
 
-  return { blackout: false, fixtures, looks, overriddenFixtures: {}, fixtureHsv: {} };
+  const cuePlayback = {};
+  (cfg.showLayouts || []).forEach(layout => {
+    if (!layout?.id) return;
+    cuePlayback[layout.id] = {
+      cueListId: layout.cueListId || cfg.cueLists?.[0]?.id || null,
+      cueId: null,
+      cueIndex: -1,
+      status: 'stopped',
+      transition: null
+    };
+  });
+
+  return {
+    blackout: false,
+    fixtures,
+    looks,
+    overriddenFixtures: {},
+    fixtureHsv: {},
+    cuePlayback,
+    cueOverrides: {}
+  };
 }
 
 class State {
@@ -104,12 +138,27 @@ class State {
       mergedLooks[lookId] = this.state.looks[lookId] !== undefined ? this.state.looks[lookId] : 0;
     });
 
+    const mergedCuePlayback = {};
+    Object.keys(newDefaults.cuePlayback || {}).forEach(layoutId => {
+      const existing = this.state.cuePlayback?.[layoutId];
+      if (existing) {
+        mergedCuePlayback[layoutId] = {
+          ...newDefaults.cuePlayback[layoutId],
+          ...existing
+        };
+      } else {
+        mergedCuePlayback[layoutId] = newDefaults.cuePlayback[layoutId];
+      }
+    });
+
     this.state = {
       blackout: this.state.blackout,
       fixtures: mergedFixtures,
       looks: mergedLooks,
       overriddenFixtures: this.state.overriddenFixtures || {},
-      fixtureHsv: this.state.fixtureHsv || {}
+      fixtureHsv: this.state.fixtureHsv || {},
+      cuePlayback: mergedCuePlayback,
+      cueOverrides: this.state.cueOverrides || {}
     };
     this.notifyListeners();
   }
@@ -143,6 +192,20 @@ class State {
       };
     }
 
+    if (updates.cuePlayback) {
+      Object.keys(updates.cuePlayback).forEach(layoutId => {
+        const nextPlayback = updates.cuePlayback[layoutId];
+        if (nextPlayback === null) {
+          delete this.state.cuePlayback[layoutId];
+        } else {
+          this.state.cuePlayback[layoutId] = {
+            ...(this.state.cuePlayback[layoutId] || {}),
+            ...nextPlayback
+          };
+        }
+      });
+    }
+
     // Handle overriddenFixtures updates
     // Format: { fixtureId: { active: boolean, looks: [{ id, color }] } }
     if (updates.overriddenFixtures) {
@@ -154,6 +217,19 @@ class State {
         } else {
           // Set override for this fixture
           this.state.overriddenFixtures[fixtureId] = override;
+        }
+      });
+    }
+
+    // Handle cueOverrides updates
+    // Format: { fixtureId: { active: boolean, dashboardId, cueListId, cueId } }
+    if (updates.cueOverrides) {
+      Object.keys(updates.cueOverrides).forEach(fixtureId => {
+        const override = updates.cueOverrides[fixtureId];
+        if (override === null || override.active === false) {
+          delete this.state.cueOverrides[fixtureId];
+        } else {
+          this.state.cueOverrides[fixtureId] = override;
         }
       });
     }
