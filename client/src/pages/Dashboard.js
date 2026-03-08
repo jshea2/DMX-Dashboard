@@ -411,6 +411,7 @@ const Dashboard = () => {
   const [addCueNameInput, setAddCueNameInput] = useState('');
   const [showGoToCueModal, setShowGoToCueModal] = useState(false);
   const [showAddCueModal, setShowAddCueModal] = useState(false);
+  const [showCuePage, setShowCuePage] = useState(false);
   const [editingCueId, setEditingCueId] = useState(null);
   const [cueUiError, setCueUiError] = useState('');
   const [cueTransitioning, setCueTransitioning] = useState(false);
@@ -465,6 +466,19 @@ const Dashboard = () => {
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  useEffect(() => {
+    if (!config || !activeLayout || !showCuePage) return;
+    const hasCueSectionVisible = (activeLayout.sections || []).some(
+      (section) => section
+        && section.visible !== false
+        && section.type === 'static'
+        && section.staticType === 'cues'
+    );
+    if (!hasCueSectionVisible) {
+      setShowCuePage(false);
+    }
+  }, [config, activeLayout, showCuePage]);
 
   const activeCueList = useMemo(() => {
     if (!config || !activeLayout) return null;
@@ -2653,26 +2667,41 @@ const Dashboard = () => {
   }, [activeCueList, goToCueInput, normalizeCueNumber, activateCueAtIndex, startCueTransitionWindow]);
 
   const recordCue = useCallback(async (cueId) => {
-    if (!activeCueList || !cueId) return false;
+    if (!activeCueList || !cueId) {
+      return { success: false, capturedTargets: null, config: null };
+    }
     const cue = activeCueList.cues.find(item => item.id === cueId);
-    if (!cue) return false;
+    if (!cue) {
+      return { success: false, capturedTargets: null, config: null };
+    }
 
     try {
       setRecordingCueId(cue.id);
       const capturedTargets = captureCurrentCueTargets();
 
-      await persistCueListUpdate((cueList) => {
+      const persistResult = await persistCueListUpdate((cueList) => {
         const cueInConfig = (cueList.cues || []).find(item => item.id === cueId);
         if (!cueInConfig) return false;
         cueInConfig.targets = capturedTargets;
         return true;
       });
+      if (!persistResult?.success) {
+        return {
+          success: false,
+          capturedTargets,
+          config: persistResult?.config || null
+        };
+      }
       setCueUiError('');
-      return true;
+      return {
+        success: true,
+        capturedTargets,
+        config: persistResult?.config || null
+      };
     } catch (error) {
       console.error('Failed to record cue:', error);
       setCueUiError(error.message || 'Failed to record cue.');
-      return false;
+      return { success: false, capturedTargets: null, config: null };
     } finally {
       setTimeout(() => setRecordingCueId(null), 400);
     }
@@ -2681,8 +2710,10 @@ const Dashboard = () => {
   const updateActiveCue = useCallback(async () => {
     if (!activeCue || !hasActiveCueOverrides) return;
 
-    const saved = await recordCue(activeCue.id);
-    if (!saved) return;
+    const recordResult = await recordCue(activeCue.id);
+    if (!recordResult?.success) return;
+
+    const recordedTargets = recordResult?.capturedTargets || {};
 
     const fixturesToRelease = {};
     const cueOverridesToClear = {};
@@ -2690,7 +2721,7 @@ const Dashboard = () => {
     const releasedFixtureIds = [];
 
     activeCueOverriddenFixtureIds.forEach((fixtureId) => {
-      const cueTargets = activeCue.targets?.[fixtureId];
+      const cueTargets = recordedTargets?.[fixtureId] || activeCue.targets?.[fixtureId];
       if (!cueTargets || typeof cueTargets !== 'object') return;
 
       const releaseChannels = Object.keys(cueTargets);
@@ -2721,6 +2752,15 @@ const Dashboard = () => {
     if (Object.keys(cueOverridesToClear).length === 0) return;
 
     sendDashboardUpdate({
+      cuePlayback: activeLayout?.id ? {
+        [activeLayout.id]: {
+          cueListId: activeCueList?.id || null,
+          cueId: activeCue.id,
+          cueIndex: activeCueIndex,
+          status: 'playing',
+          transition: null
+        }
+      } : undefined,
       fixtures: Object.keys(fixturesToRelease).length > 0 ? fixturesToRelease : undefined,
       cueOverrides: cueOverridesToClear,
       fixtureHsv: Object.keys(fixtureHsvUpdates).length > 0 ? fixtureHsvUpdates : undefined
@@ -2733,6 +2773,9 @@ const Dashboard = () => {
     hasActiveCueOverrides,
     recordCue,
     activeCueOverriddenFixtureIds,
+    activeLayout?.id,
+    activeCueList?.id,
+    activeCueIndex,
     config?.fixtures,
     config?.fixtureProfiles,
     sendDashboardUpdate,
@@ -3018,46 +3061,84 @@ const Dashboard = () => {
 
   if (!config || !activeLayout) {
     return (
-      <div className="app">
-        <div className="header">
+      <div className="app dashboard-modern">
+        <div className="header dashboard-modern-header">
           <h1>Loading...</h1>
         </div>
       </div>
     );
   }
 
-  // Get visible sections from active layout
-  const visibleSections = (activeLayout.sections || [])
-    .sort((a, b) => a.order - b.order);
+  const orderedSections = (activeLayout.sections || [])
+    .slice()
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const visibleSections = orderedSections.filter(section => section && section.visible !== false);
+  const cueSection = visibleSections.find(section => section.type === 'static' && section.staticType === 'cues');
+  const hasCueSection = Boolean(cueSection);
+  const sectionsToRender = showCuePage
+    ? visibleSections.filter(section => section.type === 'static' && section.staticType === 'cues')
+    : visibleSections.filter(section => !(section.type === 'static' && section.staticType === 'cues'));
+  const cueList = activeCueList;
+  const hasCueEntries = Boolean(cueList && cueList.cues.length > 0);
+  const activeCueLabel = activeCue && cuePlayback.status !== 'stopped'
+    ? `${activeCue.number || activeCueIndex + 1} | ${activeCue.name || `Cue ${activeCueIndex + 1}`}`
+    : 'Cue Out';
+  const selectedCueLabel = selectedCue
+    ? `${selectedCue.number || selectedCueIndex + 1} | ${selectedCue.name || `Cue ${selectedCueIndex + 1}`}`
+    : '--';
+  const canOpenSettings = activeLayout?.showSettingsButton !== false
+    && (isEditorAnywhere || dashboardRole === 'moderator' || role === 'moderator');
 
   return (
-    <div className="app">
-      <div className="header">
-        {activeLayout.logo && (
-          <div style={{ marginBottom: '12px', textAlign: 'center' }}>
+    <div className={`app dashboard-modern ${hasCueSection ? 'dashboard-has-cue-dock' : ''} ${showCuePage ? 'dashboard-cue-page-open' : ''}`}>
+      <div className="header dashboard-modern-header">
+        <div className="dashboard-modern-brand">
+          {activeLayout.logo ? (
             <img
               src={activeLayout.logo}
               alt="Logo"
-              style={{ maxWidth: '100%', maxHeight: '120px', borderRadius: '8px' }}
+              className="dashboard-modern-logo"
             />
-          </div>
-        )}
-        {activeLayout.showName && (
-          <h1>{activeLayout.name}</h1>
-        )}
-        {activeLayout.showBlackoutButton !== false && (
-          <button
-            className={`blackout-btn ${state.blackout ? 'active' : ''}`}
-            onClick={handleBlackout}
-            disabled={dashboardRole === 'viewer'}
-            style={{
-              opacity: dashboardRole === 'viewer' ? 0.5 : 1,
-              cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer'
-            }}
-          >
-            {state.blackout ? 'Restore' : 'Blackout'}
-          </button>
-        )}
+          ) : (
+            <span className="dashboard-modern-app-icon" aria-hidden="true">⚡</span>
+          )}
+          {activeLayout.showName && (
+            <h1>{activeLayout.name}</h1>
+          )}
+        </div>
+        <div className="dashboard-modern-header-actions">
+          {activeLayout.showBlackoutButton !== false && (
+            <button
+              className={`blackout-btn ${state.blackout ? 'active' : ''}`}
+              onClick={handleBlackout}
+              disabled={dashboardRole === 'viewer'}
+              style={{
+                opacity: dashboardRole === 'viewer' ? 0.5 : 1,
+                cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {state.blackout ? 'Restore' : 'Blackout'}
+            </button>
+          )}
+          {canOpenSettings && (
+            <button
+              className="dashboard-modern-settings-btn"
+              onClick={() => {
+                if (isEditorAnywhere) {
+                  navigate('/settings', { state: { fromDashboard: urlSlug } });
+                  return;
+                }
+                navigate('/settings?tab=users', { state: { fromDashboard: urlSlug } });
+              }}
+              title={isEditorAnywhere ? 'Settings' : 'Users and Access'}
+              aria-label={isEditorAnywhere ? 'Open settings' : 'Open users and access'}
+            >
+              <span className="dashboard-modern-settings-icon" aria-hidden="true">
+                {isEditorAnywhere ? '⚙' : '👤'}
+              </span>
+            </button>
+          )}
+        </div>
       </div>
 
       {!connected && (
@@ -3093,7 +3174,7 @@ const Dashboard = () => {
         </div>
       )}
 
-      {visibleSections.map(section => {
+      {sectionsToRender.map(section => {
         // Get visible items from this section
         const visibleItems = (section.items || [])
           .slice()
@@ -3107,32 +3188,40 @@ const Dashboard = () => {
         const hasFixtures = visibleItems.some(item => item.type === 'fixture');
         const isLooksOnly = hasLooks && !hasFixtures;
         const isFixturesOnly = hasFixtures && !hasLooks;
+        const sectionIcon = isFixturesOnly ? '💡' : (isLooksOnly ? '✦' : null);
         const cueList = activeCueList;
 
         return (
-          <div key={section.id} className="card">
-            <div style={{
+          <div key={section.id} className={`card ${isCueSection ? 'cue-page-card' : ''}`}>
+            <div className={`dashboard-section-header ${isCueSection ? 'cue-header' : 'standard-header'}`} style={{
               display: 'flex',
               justifyContent: 'space-between',
-              alignItems: isCueSection && isCompactCueLayout ? 'flex-start' : 'center',
-              flexWrap: isCueSection ? 'wrap' : 'nowrap',
-              gap: isCueSection && isCompactCueLayout ? '10px' : '0',
+              alignItems: 'center',
+              flexWrap: 'nowrap',
+              gap: '0',
               marginBottom: '16px'
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div className="dashboard-section-title-wrap" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                {sectionIcon && (
+                  <span
+                    className={`dashboard-section-icon ${isFixturesOnly ? 'fixtures' : 'looks'}`}
+                    title={isFixturesOnly ? 'Fixtures section' : 'Looks section'}
+                    aria-hidden="true"
+                  >
+                    {sectionIcon}
+                  </span>
+                )}
                 <h2 style={{ margin: 0 }}>{section.name}</h2>
                 {canEditSectionLayout && isFixturesOnly && (
                   <button
-                    className="fixture-card-action btn btn-small"
+                    className="fixture-card-action btn btn-small section-edit-btn"
                     onClick={() => openFixtureSectionEditor(section)}
                     style={{
-                      padding: '5px 8px',
+                      padding: '5px 9px',
                       fontSize: '12px',
-                      background: '#2d2d2d',
-                      border: '1px solid #555',
-                      color: '#ddd',
                       lineHeight: 1,
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      marginBottom: 0
                     }}
                     title="Edit fixture names and order"
                     aria-label="Edit fixture names and order"
@@ -3142,16 +3231,14 @@ const Dashboard = () => {
                 )}
                 {canEditSectionLayout && isLooksOnly && (
                   <button
-                    className="fixture-card-action btn btn-small"
+                    className="fixture-card-action btn btn-small section-edit-btn"
                     onClick={() => openLookSectionEditor(section)}
                     style={{
-                      padding: '5px 8px',
+                      padding: '5px 9px',
                       fontSize: '12px',
-                      background: '#2d2d2d',
-                      border: '1px solid #555',
-                      color: '#ddd',
                       lineHeight: 1,
-                      cursor: 'pointer'
+                      cursor: 'pointer',
+                      marginBottom: 0
                     }}
                     title="Edit looks"
                     aria-label="Edit looks"
@@ -3160,58 +3247,13 @@ const Dashboard = () => {
                   </button>
                 )}
               </div>
-              {isCueSection ? (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  flexWrap: 'wrap',
-                  width: isCompactCueLayout ? '100%' : 'auto',
-                  justifyContent: isCompactCueLayout ? 'flex-start' : 'flex-end'
-                }}>
-                  <button
-                    className="btn btn-small"
-                    onClick={handleCuePauseOrBack}
-                    disabled={!canControlCues || !cueList || cueList.cues.length === 0}
-                    style={{
-                      padding: '10px 14px',
-                      fontSize: '13px',
-                      background: '#2f2f2f',
-                      border: '1px solid #555',
-                      opacity: (!canControlCues || !cueList || cueList.cues.length === 0) ? 0.5 : 1,
-                      cursor: (!canControlCues || !cueList || cueList.cues.length === 0) ? 'not-allowed' : 'pointer',
-                      minWidth: isMobileCueLayout ? '96px' : '110px'
-                    }}
-                  >
-                    {isCueTransitioning ? '⏸ Pause' : '◀ Back'}
-                  </button>
-                  <button
-                    className="btn btn-small"
-                    onClick={handleCueGo}
-                    disabled={!canControlCues || !cueList || cueList.cues.length === 0}
-                    style={{
-                      padding: '10px 20px',
-                      fontSize: '18px',
-                      fontWeight: 700,
-                      letterSpacing: '0.5px',
-                      background: '#3f7f3f',
-                      border: '1px solid #6bcf6b',
-                      color: '#f4fff4',
-                      opacity: (!canControlCues || !cueList || cueList.cues.length === 0) ? 0.5 : 1,
-                      cursor: (!canControlCues || !cueList || cueList.cues.length === 0) ? 'not-allowed' : 'pointer',
-                      minWidth: isMobileCueLayout ? '104px' : '120px'
-                    }}
-                  >
-                    {cueGoButtonLabel}
-                  </button>
-                </div>
-              ) : section.showClearButton && (() => {
+              {!isCueSection && section.showClearButton && (() => {
                 const fixtureItems = visibleItems.filter(item => item.type === 'fixture');
                 const lookItems = visibleItems.filter(item => item.type === 'look');
 
                 return (
                   <button
-                    className="btn btn-small"
+                    className="btn btn-small dashboard-section-clear-btn"
                     onClick={() => {
                       if (isLooksOnly) {
                         handleClearAllLooks(lookItems.map(item => item.id));
@@ -3219,7 +3261,7 @@ const Dashboard = () => {
                         handleClearAllFixtures(fixtureItems.map(item => item.id));
                       }
                     }}
-                    style={{ padding: '6px 12px', fontSize: '12px', background: '#555', border: '1px solid #666' }}
+                    style={{ padding: '8px 14px', fontSize: '13px', marginBottom: 0 }}
                   >
                     {isFixturesOnly ? 'Clear All' : 'Clear'}
                   </button>
@@ -3228,7 +3270,7 @@ const Dashboard = () => {
             </div>
 
             {isCueSection ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div className="cue-page-content" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                 {!cueList && (
                   <div style={{ padding: '12px', border: '1px solid #444', borderRadius: '8px', color: '#aaa', fontSize: '13px' }}>
                     No cue list is assigned to this dashboard.
@@ -3236,94 +3278,67 @@ const Dashboard = () => {
                 )}
                 {cueList && (
                   <>
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: isCompactCueLayout ? 'flex-start' : 'flex-end',
-                      flexDirection: isCompactCueLayout ? 'column' : 'row',
-                      gap: '10px',
-                      flexWrap: 'wrap'
-                    }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                        <div style={{ fontSize: '15px', fontWeight: 700, color: '#dce9ff' }}>{cueList.name}</div>
-                        <div style={{ fontSize: '12px', color: activeCue && cuePlayback.status !== 'stopped' ? '#7de89a' : '#8a919e' }}>
+                    <div className="cue-page-toolbar">
+                      <div className="cue-page-meta">
+                        <div className="cue-page-list-name">{cueList.name}</div>
+                        <div className={`cue-page-active-label ${activeCue && cuePlayback.status !== 'stopped' ? 'is-active' : ''}`}>
                           {activeCue && cuePlayback.status !== 'stopped'
                             ? `Active Cue: ${activeCue.number || activeCueIndex + 1} | ${activeCue.name || `Cue ${activeCueIndex + 1}`}`
                             : 'Active Cue: Cue Out'}
                         </div>
                       </div>
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        flexWrap: 'wrap',
-                        width: isCompactCueLayout ? '100%' : 'auto',
-                        justifyContent: isCompactCueLayout ? 'flex-start' : 'flex-end'
-                      }}>
+                      <div className="cue-page-primary-actions">
                         <button
-                          className="btn btn-small"
-                          onClick={goCueHome}
-                          disabled={!canControlCues}
-                          style={{
-                            padding: '6px 10px',
-                            fontSize: '12px',
-                            background: '#7a2424',
-                            border: '1px solid #bf5555',
-                            color: '#ffe9e9',
-                            opacity: !canControlCues ? 0.5 : 1,
-                            cursor: !canControlCues ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          Cue Out
-                        </button>
-                        <button
-                          className="btn btn-small"
-                          onClick={openGoToCueModal}
+                          className="dashboard-cue-action-btn cue-page-action-btn back"
+                          onClick={handleCuePauseOrBack}
                           disabled={!canControlCues || cueList.cues.length === 0}
-                          style={{
-                            padding: '6px 10px',
-                            fontSize: '12px',
-                            background: '#2f2f2f',
-                            border: '1px solid #555',
-                            opacity: (!canControlCues || cueList.cues.length === 0) ? 0.5 : 1,
-                            cursor: (!canControlCues || cueList.cues.length === 0) ? 'not-allowed' : 'pointer'
-                          }}
                         >
-                          Go to Cue
+                          <span className="cue-btn-icon" aria-hidden="true">{isCueTransitioning ? '⏸' : '⏮'}</span>
+                          <span className="cue-btn-text">{isCueTransitioning ? 'Pause' : 'Back'}</span>
                         </button>
                         <button
-                          className="btn btn-small"
-                          onClick={updateActiveCue}
-                          disabled={!canRecordCues || !activeCue || !hasActiveCueOverrides}
-                          style={{
-                            padding: '6px 10px',
-                            fontSize: '12px',
-                            background: (canRecordCues && activeCue && hasActiveCueOverrides) ? '#2f5f8f' : '#3a3a3a',
-                            border: (canRecordCues && activeCue && hasActiveCueOverrides) ? '1px solid #5a89bf' : '1px solid #666',
-                            color: (canRecordCues && activeCue && hasActiveCueOverrides) ? '#e5f1ff' : '#9ca3ad',
-                            opacity: (!canRecordCues || !activeCue || !hasActiveCueOverrides) ? 0.5 : 1,
-                            cursor: (!canRecordCues || !activeCue || !hasActiveCueOverrides) ? 'not-allowed' : 'pointer'
-                          }}
+                          className="dashboard-cue-action-btn cue-page-action-btn go"
+                          onClick={handleCueGo}
+                          disabled={!canControlCues || cueList.cues.length === 0}
                         >
-                          Update Active Cue
-                        </button>
-                        <button
-                          className="btn btn-small"
-                          onClick={openAddCueModal}
-                          disabled={!canRecordCues}
-                          style={{
-                            padding: '6px 10px',
-                            fontSize: '12px',
-                            background: '#2f4f2f',
-                            border: '1px solid #4a7',
-                            color: '#d7ffd7',
-                            opacity: !canRecordCues ? 0.5 : 1,
-                            cursor: !canRecordCues ? 'not-allowed' : 'pointer'
-                          }}
-                        >
-                          + Add Cue
+                          <span className="cue-btn-icon" aria-hidden="true">▶</span>
+                          <span className="cue-btn-text">{cueGoButtonLabel}</span>
                         </button>
                       </div>
+                    </div>
+                    <div className="cue-page-secondary-actions">
+                        <button
+                          className="dashboard-cue-action-btn cue-page-action-btn cue-out"
+                          onClick={goCueHome}
+                          disabled={!canControlCues}
+                        >
+                          <span className="cue-btn-icon" aria-hidden="true">✕</span>
+                          <span className="cue-btn-text">Cue Out</span>
+                        </button>
+                        <button
+                          className="dashboard-cue-action-btn cue-page-action-btn"
+                          onClick={openGoToCueModal}
+                          disabled={!canControlCues || cueList.cues.length === 0}
+                        >
+                          <span className="cue-btn-icon" aria-hidden="true">⌕</span>
+                          <span className="cue-btn-text">Go to Cue</span>
+                        </button>
+                        <button
+                          className="dashboard-cue-action-btn cue-page-action-btn update"
+                          onClick={updateActiveCue}
+                          disabled={!canRecordCues || !activeCue || !hasActiveCueOverrides}
+                        >
+                          <span className="cue-btn-icon" aria-hidden="true">↯</span>
+                          <span className="cue-btn-text">Update Active Cue</span>
+                        </button>
+                        <button
+                          className="dashboard-cue-action-btn cue-page-action-btn add"
+                          onClick={openAddCueModal}
+                          disabled={!canRecordCues}
+                        >
+                          <span className="cue-btn-icon" aria-hidden="true">＋</span>
+                          <span className="cue-btn-text">Add Cue</span>
+                        </button>
                     </div>
                     {cueUiError && (
                       <div
@@ -3345,26 +3360,14 @@ const Dashboard = () => {
                         No cues yet. Add a cue and record values.
                       </div>
                     ) : (
-                      <div
-                        style={{
-                          border: '1px solid #444',
-                          borderRadius: '10px',
-                          background: '#1f1f1f',
-                          padding: '8px'
-                        }}
-                      >
+                      <div className="cue-page-list-shell">
                         <div
                           ref={cueListScrollContainerRef}
+                          className="cue-page-list-scroll"
                           style={{
                             height: isCompactCueLayout
                               ? (isMobileCueLayout ? 'clamp(240px, 42vh, 330px)' : 'clamp(300px, 46vh, 390px)')
-                              : '430px',
-                            overflowY: 'auto',
-                            overflowX: 'hidden',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '8px',
-                            paddingRight: '4px'
+                              : '430px'
                           }}
                         >
                           {cueList.cues.map((cue, cueIndex) => {
@@ -3394,14 +3397,17 @@ const Dashboard = () => {
                               key={cue.id}
                               ref={(node) => setCueRowRef(cue.id, node)}
                               onClick={() => setSelectedCueId(cue.id)}
+                              className={`cue-page-row ${isActiveCue ? 'is-active' : ''} ${isSelectedCue ? 'is-selected' : ''}`}
                               style={{
                                 position: 'relative',
                                 overflow: 'hidden',
                                 padding: isMobileCueLayout ? '8px' : '8px 10px',
                                 flexShrink: 0,
                                 borderRadius: '10px',
-                                border: `2px solid ${isActiveCue ? CUE_ACCENT_COLOR : (isSelectedCue ? '#f0f0f0' : '#444')}`,
-                                background: isActiveCue ? '#2a3f5a' : '#262626',
+                                border: `1px solid ${isActiveCue ? '#2d7df6' : (isSelectedCue ? 'rgba(130, 150, 180, 0.55)' : 'rgba(83, 107, 149, 0.38)')}`,
+                                background: isActiveCue
+                                  ? 'linear-gradient(140deg, rgba(27, 67, 143, 0.86) 0%, rgba(20, 45, 95, 0.9) 100%)'
+                                  : 'linear-gradient(140deg, rgba(17, 35, 69, 0.9) 0%, rgba(12, 26, 53, 0.92) 100%)',
                                 cursor: 'pointer'
                               }}
                             >
@@ -3519,11 +3525,31 @@ const Dashboard = () => {
                                 <span style={{
                                   gridArea: isCompactCueLayout ? 'status' : undefined,
                                   fontSize: '11px',
-                                  color: '#d2e7ff',
+                                  color: cueStatusLabel ? '#d2e7ff' : 'transparent',
                                   letterSpacing: '0.5px',
-                                  textAlign: isCompactCueLayout ? 'left' : 'center'
+                                  textAlign: isCompactCueLayout ? 'left' : 'center',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: isCompactCueLayout ? 'flex-start' : 'center',
+                                  minHeight: '24px'
                                 }}>
-                                  {cueStatusLabel}
+                                  {cueStatusLabel ? (
+                                    <span style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      minHeight: '24px',
+                                      padding: '0 10px',
+                                      borderRadius: '999px',
+                                      background: isActiveCue ? 'rgba(52, 112, 215, 0.75)' : 'rgba(120, 140, 170, 0.42)',
+                                      border: isActiveCue ? '1px solid rgba(120, 176, 255, 0.72)' : '1px solid rgba(148, 165, 193, 0.46)',
+                                      color: '#d9e9ff',
+                                      fontWeight: 700,
+                                      letterSpacing: '0.4px'
+                                    }}>
+                                      {cueStatusLabel}
+                                    </span>
+                                  ) : null}
                                 </span>
 
                                 {isEditingCue ? (
@@ -3677,7 +3703,9 @@ const Dashboard = () => {
                   </>
                 )}
               </div>
-            ) : visibleItems.map(item => {
+            ) : (
+              <div className={`dashboard-section-body ${isFixturesOnly ? 'is-fixtures' : ''} ${isLooksOnly ? 'is-looks' : ''}`}>
+                {visibleItems.map(item => {
               if (item.type === 'look') {
                 const look = (config.looks || []).find(l => l && l.id === item.id);
                 if (!look) return null;
@@ -3687,11 +3715,49 @@ const Dashboard = () => {
                 const lookIsActive = lookLevel > 0.001;
                 const lookAccent = LOOK_COLOR_MAP[look.color] || '#4a90e2';
                 const isViewer = dashboardRole === 'viewer';
+                const isSliderMode = lookUiMode === 'slider';
+                const canClickLookCard = !isSliderMode && !isViewer;
+
+                const handleLookCardClick = () => {
+                  if (!canClickLookCard) return;
+                  if (lookUiMode === 'radio') {
+                    handleLookRadioButton(look.id, lookLevel);
+                  } else {
+                    handleLookToggleButton(look.id, lookLevel);
+                  }
+                };
 
                 return (
-                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                  <div
+                    key={item.id}
+                    className={`look-list-item ${lookIsActive ? 'is-active' : ''}`}
+                    onClick={canClickLookCard ? handleLookCardClick : undefined}
+                    role={canClickLookCard ? 'button' : undefined}
+                    tabIndex={canClickLookCard ? 0 : undefined}
+                    onKeyDown={canClickLookCard ? (e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleLookCardClick();
+                      }
+                    } : undefined}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      marginBottom: '10px',
+                      padding: '14px 14px 12px',
+                      borderRadius: '14px',
+                      border: `1px solid ${lookIsActive ? `${lookAccent}b8` : 'rgba(70, 95, 142, 0.45)'}`,
+                      background: lookIsActive
+                        ? `linear-gradient(145deg, ${lookAccent}24 0%, rgba(17, 33, 67, 0.92) 60%, rgba(12, 24, 52, 0.94) 100%)`
+                        : 'linear-gradient(145deg, rgba(16, 29, 57, 0.94) 0%, rgba(12, 24, 50, 0.93) 100%)',
+                      transition: 'transform 0.16s ease, border-color 0.16s ease, box-shadow 0.2s ease',
+                      cursor: canClickLookCard ? 'pointer' : 'default',
+                      opacity: isViewer && !isSliderMode ? 0.72 : 1
+                    }}
+                  >
                     <div style={{ flex: 1 }}>
-                      {lookUiMode === 'slider' ? (
+                      {isSliderMode ? (
                         <Slider
                           label={look.name}
                           value={lookLevel * 100}
@@ -3704,29 +3770,14 @@ const Dashboard = () => {
                           disabled={isViewer}
                         />
                       ) : (
-                        <button
-                          className="btn"
-                          onClick={() => {
-                            if (lookUiMode === 'radio') {
-                              handleLookRadioButton(look.id, lookLevel);
-                            } else {
-                              handleLookToggleButton(look.id, lookLevel);
-                            }
-                          }}
-                          disabled={isViewer}
+                        <div
                           style={{
                             width: '100%',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
                             gap: '10px',
-                            padding: '12px 14px',
-                            borderRadius: '10px',
-                            border: `2px solid ${lookIsActive ? lookAccent : '#555'}`,
-                            background: lookIsActive ? `${lookAccent}22` : '#2b2b2b',
-                            color: '#f0f0f0',
-                            cursor: isViewer ? 'not-allowed' : 'pointer',
-                            opacity: isViewer ? 0.5 : 1
+                            minHeight: '32px'
                           }}
                         >
                           <span style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '16px', fontWeight: 600 }}>
@@ -3747,10 +3798,10 @@ const Dashboard = () => {
                           <span style={{ fontSize: '13px', color: '#ddd', whiteSpace: 'nowrap' }}>
                             {lookIsActive ? 'On' : 'Off'}
                           </span>
-                        </button>
+                        </div>
                       )}
                     </div>
-                    {lookUiMode === 'slider' && (
+                    {isSliderMode && (
                       <button
                         className="btn btn-small"
                         onClick={() => handleLookToggleButton(look.id, lookLevel)}
@@ -3780,10 +3831,10 @@ const Dashboard = () => {
                             borderRadius: '50%',
                             background: '#fff',
                             position: 'absolute',
-                            top: '4px',
+                            top: '3px',
                             left: lookIsActive ? '28px' : '4px',
                             transition: 'left 0.2s',
-                            boxShadow: '0 2px 4px rgba(0,0,0,0.25)'
+                          boxShadow: '0 2px 4px rgba(0,0,0,0.25)'
                           }}
                         />
                       </button>
@@ -3791,7 +3842,10 @@ const Dashboard = () => {
                     {look.showRecordButton && (
                       <button
                         className={`btn btn-small record-btn ${recordingLook === look.id ? 'recording' : ''}`}
-                        onClick={() => handleRecordLook(look.id)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRecordLook(look.id);
+                        }}
                         disabled={!canRecordLooks}
                         style={{
                           padding: '6px 10px',
@@ -4125,24 +4179,24 @@ const Dashboard = () => {
                 return (
                   <div
                     key={item.id}
-                    className="fixture-list-item"
+                    className={`fixture-list-item dashboard-modern-fixture-card ${brightnessValue > 0 ? 'is-active' : ''}`}
                     onClick={handleFixtureCardClick}
                     style={{
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'stretch',
                       padding: '16px',
-                      background: '#2a2a2a',
-                      borderRadius: '12px',
-                      marginBottom: '8px',
+                      background: 'linear-gradient(145deg, rgba(16, 29, 57, 0.94) 0%, rgba(12, 24, 50, 0.93) 100%)',
+                      borderRadius: '14px',
+                      marginBottom: '10px',
                       cursor: 'pointer',
                       transition: 'all 0.2s',
-                      border: `2px solid ${borderColor}`,
-                      boxShadow: boxShadow,
+                      border: `1px solid ${borderColor}`,
+                      boxShadow: boxShadow !== 'none'
+                        ? `${boxShadow}, inset 0 1px 0 rgba(255,255,255,0.06)`
+                        : 'inset 0 1px 0 rgba(255,255,255,0.05)',
                       userSelect: 'none'
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = '#333333'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = '#2a2a2a'}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
@@ -4201,16 +4255,16 @@ const Dashboard = () => {
                             toggleFixtureProfileLink(profile?.id);
                           }}
                           disabled={dashboardRole === 'viewer' || !profile?.id}
-                          className="fixture-card-action btn btn-small"
+                          className="fixture-card-action btn btn-small fixture-mini-btn fixture-link-btn"
                           style={{
                             width: '36px',
                             height: '32px',
                             padding: 0,
                             fontSize: '18px',
                             lineHeight: 1,
-                            background: isProfileLinked ? '#2f6a45' : '#555',
-                            color: isProfileLinked ? '#c9ffd9' : '#ddd',
-                            border: `1px solid ${isProfileLinked ? '#4ec178' : '#666'}`,
+                            background: isProfileLinked ? '#12a05d' : 'rgba(38, 54, 86, 0.95)',
+                            color: isProfileLinked ? '#e8fff2' : '#d7e5ff',
+                            border: `1px solid ${isProfileLinked ? '#38d985' : 'rgba(102, 131, 181, 0.58)'}`,
                             opacity: (dashboardRole === 'viewer' || !profile?.id) ? 0.5 : 1,
                             cursor: (dashboardRole === 'viewer' || !profile?.id) ? 'not-allowed' : 'pointer',
                             flexShrink: 0
@@ -4229,12 +4283,12 @@ const Dashboard = () => {
                             handleClearAllFixtures([fixture.id]);
                           }}
                           disabled={dashboardRole === 'viewer'}
-                          className="fixture-card-action btn btn-small"
+                          className="fixture-card-action btn btn-small fixture-mini-btn fixture-clear-btn"
                           style={{
-                            padding: '5px 10px',
-                            fontSize: '11px',
-                            background: '#555',
-                            border: '1px solid #666',
+                            padding: '6px 12px',
+                            fontSize: '12px',
+                            background: 'rgba(38, 54, 86, 0.95)',
+                            border: '1px solid rgba(102, 131, 181, 0.58)',
                             opacity: dashboardRole === 'viewer' ? 0.5 : 1,
                             cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
                             flexShrink: 0
@@ -4249,18 +4303,20 @@ const Dashboard = () => {
                           <button
                             onClick={handleToggle}
                             disabled={dashboardRole === 'viewer'}
-                            className="fixture-card-action"
+                            className="fixture-card-action fixture-toggle-switch"
                             style={{
                               width: '56px',
                               height: '32px',
                               borderRadius: '16px',
                               background: brightnessValue > 0
                                 ? (colorPreview || `rgb(${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)}, ${Math.round(85 + (brightnessValue / 100) * 85)})`)
-                                : '#333',
-                              border: 'none',
+                                : '#24344f',
+                              border: brightnessValue > 0
+                                ? `1px solid ${colorPreview || 'rgba(161, 201, 255, 0.9)'}`
+                                : '1px solid rgba(117, 142, 186, 0.6)',
                               cursor: dashboardRole === 'viewer' ? 'not-allowed' : 'pointer',
                               position: 'relative',
-                              transition: 'background 0.2s',
+                              transition: 'background 0.2s, border-color 0.2s',
                               opacity: dashboardRole === 'viewer' ? 0.5 : 1,
                               flexShrink: 0
                             }}
@@ -4272,7 +4328,7 @@ const Dashboard = () => {
                                 borderRadius: '50%',
                                 background: '#fff',
                                 position: 'absolute',
-                                top: '4px',
+                                top: '3px',
                                 left: brightnessValue > 0 ? '28px' : '4px',
                                 transition: 'left 0.2s',
                                 boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
@@ -4487,9 +4543,126 @@ const Dashboard = () => {
               }
               return null;
             })}
+              </div>
+            )}
           </div>
         );
       })}
+
+      {hasCueSection && (
+        <div className={`dashboard-cue-dock ${showCuePage ? 'cue-page-minimal' : ''}`}>
+          {showCuePage ? (
+            <div className="dashboard-cue-dock-minimal-row">
+              <div className="dashboard-cue-dock-top">
+                <div className={`dashboard-cue-state-card ${activeCue && cuePlayback.status !== 'stopped' ? 'active' : ''}`}>
+                  <span className="dashboard-cue-state-label">Active Cue</span>
+                  <span className="dashboard-cue-state-value">{activeCueLabel}</span>
+                </div>
+                <div className="dashboard-cue-state-card">
+                  <span className="dashboard-cue-state-label">Next Cue</span>
+                  <span className="dashboard-cue-state-value">{selectedCueLabel}</span>
+                </div>
+              </div>
+              <div className="dashboard-cue-dock-side">
+                <button
+                  className={`dashboard-cue-action-btn cue-list-toggle cue-list-side ${showCuePage ? 'active' : ''}`}
+                  onClick={() => setShowCuePage(prev => !prev)}
+                  aria-label={showCuePage ? 'Back to dashboard content' : 'Open cue list page'}
+                  title={showCuePage ? 'Dashboard' : 'Cue List'}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">☰</span>
+                  <span className="cue-btn-text">{showCuePage ? 'Dashboard' : 'Cue List'}</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="dashboard-cue-dock-top">
+                <div className={`dashboard-cue-state-card ${activeCue && cuePlayback.status !== 'stopped' ? 'active' : ''}`}>
+                  <span className="dashboard-cue-state-label">Active Cue</span>
+                  <span className="dashboard-cue-state-value">{activeCueLabel}</span>
+                </div>
+                <div className="dashboard-cue-state-card">
+                  <span className="dashboard-cue-state-label">Next Cue</span>
+                  <span className="dashboard-cue-state-value">{selectedCueLabel}</span>
+                </div>
+              </div>
+              <div className="dashboard-cue-dock-bottom">
+              <div className="dashboard-cue-dock-actions">
+                <button
+                  className="dashboard-cue-action-btn back"
+                  onClick={handleCuePauseOrBack}
+                  disabled={!canControlCues || !hasCueEntries}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">{isCueTransitioning ? '⏸' : '⏮'}</span>
+                  <span className="cue-btn-text">{isCueTransitioning ? 'Pause' : 'Back'}</span>
+                </button>
+                <button
+                  className="dashboard-cue-action-btn go"
+                  onClick={handleCueGo}
+                  disabled={!canControlCues || !hasCueEntries}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">▶</span>
+                  <span className="cue-btn-text">{cueGoButtonLabel}</span>
+                </button>
+                <button
+                  className="dashboard-cue-action-btn update"
+                  onClick={updateActiveCue}
+                  disabled={!canRecordCues || !activeCue || !hasActiveCueOverrides}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">↯</span>
+                  <span className="cue-btn-text">Update Cue</span>
+                </button>
+                <button
+                  className="dashboard-cue-action-btn cue-out"
+                  onClick={goCueHome}
+                  disabled={!canControlCues}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">✕</span>
+                  <span className="cue-btn-text">Cue Out</span>
+                </button>
+                <button
+                  className="dashboard-cue-action-btn"
+                  onClick={openGoToCueModal}
+                  disabled={!canControlCues || !hasCueEntries}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">⌕</span>
+                  <span className="cue-btn-text">Go to Cue</span>
+                </button>
+                <button
+                  className="dashboard-cue-action-btn add"
+                  onClick={openAddCueModal}
+                  disabled={!canRecordCues}
+                >
+                  <span className="cue-btn-icon" aria-hidden="true">＋</span>
+                  <span className="cue-btn-text">Add Cue</span>
+                </button>
+              </div>
+                <div className="dashboard-cue-dock-side">
+                <ConnectedUsers
+                  activeClients={activeClients}
+                  show={activeLayout?.showConnectedUsers !== false}
+                  dashboardId={activeLayout?.id}
+                  defaultRole={activeLayout?.accessControl?.defaultRole}
+                  inline={true}
+                  compact={true}
+                  className="dashboard-cue-users-inline"
+                />
+                  <button
+                    className={`dashboard-cue-action-btn cue-list-toggle cue-list-side ${showCuePage ? 'active' : ''}`}
+                    onClick={() => setShowCuePage(prev => !prev)}
+                    aria-label={showCuePage ? 'Back to dashboard content' : 'Open cue list page'}
+                    title={showCuePage ? 'Dashboard' : 'Cue List'}
+                  >
+                    <span className="cue-btn-icon" aria-hidden="true">☰</span>
+                    <span className="cue-btn-text">{showCuePage ? 'Dashboard' : 'Cue List'}</span>
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {showGoToCueModal && (
         <div
@@ -4654,215 +4827,105 @@ const Dashboard = () => {
       {showFixtureEditor && (
         <div
           onClick={closeFixtureSectionEditor}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 2200,
-            padding: '20px'
-          }}
+          className="dashboard-editor-overlay"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              width: '100%',
-              maxWidth: '680px',
-              maxHeight: '85vh',
-              overflowY: 'auto',
-              background: '#222',
-              border: '1px solid #444',
-              borderRadius: '12px',
-              padding: '18px'
-            }}
+            className="dashboard-editor-modal dashboard-editor-modal-fixtures"
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h3 style={{ margin: 0 }}>Edit {fixtureEditorSectionName}</h3>
+            <div className="dashboard-editor-header">
+              <h3 className="dashboard-editor-title">Edit {fixtureEditorSectionName}</h3>
               <button
-                className="btn btn-small"
+                className="dashboard-editor-close-btn"
                 onClick={closeFixtureSectionEditor}
                 disabled={fixtureEditorSaving}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '12px',
-                  background: '#444',
-                  border: '1px solid #666',
-                  cursor: fixtureEditorSaving ? 'not-allowed' : 'pointer',
-                  opacity: fixtureEditorSaving ? 0.5 : 1
-                }}
               >
                 Close
               </button>
             </div>
 
-            <p style={{ margin: '0 0 14px 0', color: '#aaa', fontSize: '13px' }}>
+            <p className="dashboard-editor-description">
               Rename fixture cards and change their order for this dashboard section.
             </p>
 
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+            <div className="dashboard-editor-link-row">
               <button
-                className="btn btn-small"
+                className="dashboard-editor-link-btn"
                 onClick={() => goToSettingsTab('patching')}
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  background: '#2f2f2f',
-                  border: '1px solid #555',
-                  cursor: 'pointer'
-                }}
               >
                 Patch
               </button>
               <button
-                className="btn btn-small"
+                className="dashboard-editor-link-btn"
                 onClick={() => goToSettingsTab('profiles')}
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  background: '#2f2f2f',
-                  border: '1px solid #555',
-                  cursor: 'pointer'
-                }}
               >
                 Fixture Editor
               </button>
               <button
-                className="btn btn-small"
+                className="dashboard-editor-link-btn"
                 onClick={() => goToSettingsTab('showlayout')}
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '12px',
-                  background: '#2f2f2f',
-                  border: '1px solid #555',
-                  cursor: 'pointer'
-                }}
               >
                 Dashboard Settings
               </button>
             </div>
 
             {fixtureEditorError && (
-              <div
-                style={{
-                  marginBottom: '12px',
-                  padding: '10px',
-                  borderRadius: '6px',
-                  border: '1px solid #a33',
-                  background: '#3a1f1f',
-                  color: '#ffb3b3',
-                  fontSize: '13px'
-                }}
-              >
+              <div className="dashboard-editor-alert">
                 {fixtureEditorError}
               </div>
             )}
 
             {fixtureEditorDraft.length === 0 ? (
-              <div style={{ padding: '10px', border: '1px solid #444', borderRadius: '6px', color: '#aaa', fontSize: '13px' }}>
+              <div className="dashboard-editor-empty">
                 No fixtures found in this section.
               </div>
             ) : (
-              fixtureEditorDraft.map((fixtureItem, index) => (
-                <div
-                  key={fixtureItem.id}
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '36px 1fr 84px',
-                    gap: '8px',
-                    alignItems: 'center',
-                    padding: '8px',
-                    border: '1px solid #3d3d3d',
-                    borderRadius: '6px',
-                    marginBottom: '8px',
-                    background: '#1e1e1e'
-                  }}
-                >
-                  <div style={{ textAlign: 'center', color: '#888', fontSize: '12px' }}>
-                    {index + 1}
+              <div className="dashboard-editor-list">
+                {fixtureEditorDraft.map((fixtureItem, index) => (
+                  <div key={fixtureItem.id} className="dashboard-editor-row">
+                    <div className="dashboard-editor-index">{index + 1}</div>
+                    <input
+                      type="text"
+                      value={fixtureItem.name}
+                      onChange={(e) => updateFixtureDraftName(fixtureItem.id, e.target.value)}
+                      disabled={fixtureEditorSaving}
+                      className="dashboard-editor-input"
+                    />
+                    <div className="dashboard-editor-row-actions">
+                      <button
+                        className="dashboard-editor-icon-btn"
+                        onClick={() => moveFixtureDraftItem(index, -1)}
+                        disabled={fixtureEditorSaving || index === 0}
+                        title="Move up"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="dashboard-editor-icon-btn"
+                        onClick={() => moveFixtureDraftItem(index, 1)}
+                        disabled={fixtureEditorSaving || index === fixtureEditorDraft.length - 1}
+                        title="Move down"
+                      >
+                        ↓
+                      </button>
+                    </div>
                   </div>
-                  <input
-                    type="text"
-                    value={fixtureItem.name}
-                    onChange={(e) => updateFixtureDraftName(fixtureItem.id, e.target.value)}
-                    disabled={fixtureEditorSaving}
-                    style={{
-                      width: '100%',
-                      background: '#111b35',
-                      border: '1px solid #3a4d76',
-                      borderRadius: '4px',
-                      color: '#f0f0f0',
-                      padding: '8px 10px',
-                      fontSize: '14px'
-                    }}
-                  />
-                  <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                    <button
-                      className="btn btn-small"
-                      onClick={() => moveFixtureDraftItem(index, -1)}
-                      disabled={fixtureEditorSaving || index === 0}
-                      style={{
-                        width: '36px',
-                        padding: '4px 0',
-                        fontSize: '12px',
-                        background: '#2f2f2f',
-                        border: '1px solid #555',
-                        opacity: (fixtureEditorSaving || index === 0) ? 0.4 : 1,
-                        cursor: (fixtureEditorSaving || index === 0) ? 'not-allowed' : 'pointer'
-                      }}
-                      title="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      className="btn btn-small"
-                      onClick={() => moveFixtureDraftItem(index, 1)}
-                      disabled={fixtureEditorSaving || index === fixtureEditorDraft.length - 1}
-                      style={{
-                        width: '36px',
-                        padding: '4px 0',
-                        fontSize: '12px',
-                        background: '#2f2f2f',
-                        border: '1px solid #555',
-                        opacity: (fixtureEditorSaving || index === fixtureEditorDraft.length - 1) ? 0.4 : 1,
-                        cursor: (fixtureEditorSaving || index === fixtureEditorDraft.length - 1) ? 'not-allowed' : 'pointer'
-                      }}
-                      title="Move down"
-                    >
-                      ↓
-                    </button>
-                  </div>
-                </div>
-              ))
+                ))}
+              </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' }}>
+            <div className="dashboard-editor-footer">
               <button
-                className="btn btn-small"
+                className="dashboard-editor-footer-btn"
                 onClick={closeFixtureSectionEditor}
                 disabled={fixtureEditorSaving}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  background: '#444',
-                  border: '1px solid #666',
-                  opacity: fixtureEditorSaving ? 0.5 : 1,
-                  cursor: fixtureEditorSaving ? 'not-allowed' : 'pointer'
-                }}
               >
                 Cancel
               </button>
               <button
-                className="btn btn-small btn-primary"
+                className="dashboard-editor-footer-btn save"
                 onClick={saveFixtureSectionEditor}
                 disabled={fixtureEditorSaving}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  opacity: fixtureEditorSaving ? 0.5 : 1,
-                  cursor: fixtureEditorSaving ? 'not-allowed' : 'pointer'
-                }}
               >
                 {fixtureEditorSaving ? 'Saving...' : 'Save'}
               </button>
@@ -4874,366 +4937,215 @@ const Dashboard = () => {
       {showLookEditor && (
         <div
           onClick={closeLookSectionEditor}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 2200,
-            padding: '20px'
-          }}
+          className="dashboard-editor-overlay"
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            style={{
-              width: '100%',
-              maxWidth: '920px',
-              maxHeight: '85vh',
-              overflowY: 'auto',
-              background: '#222',
-              border: '1px solid #444',
-              borderRadius: '12px',
-              padding: '18px'
-            }}
+            className="dashboard-editor-modal dashboard-editor-modal-looks"
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-              <h3 style={{ margin: 0 }}>Edit {lookEditorSectionName}</h3>
+            <div className="dashboard-editor-header">
+              <h3 className="dashboard-editor-title">Edit {lookEditorSectionName}</h3>
               <button
-                className="btn btn-small"
+                className="dashboard-editor-close-btn"
                 onClick={closeLookSectionEditor}
                 disabled={lookEditorSaving}
-                style={{
-                  padding: '4px 10px',
-                  fontSize: '12px',
-                  background: '#444',
-                  border: '1px solid #666',
-                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer',
-                  opacity: lookEditorSaving ? 0.5 : 1
-                }}
               >
                 Close
               </button>
             </div>
 
-            <p style={{ margin: '0 0 14px 0', color: '#aaa', fontSize: '13px' }}>
+            <p className="dashboard-editor-description">
               Manage looks for this dashboard only. You can rename/reorder looks, choose color, record values, show or hide the dashboard rec button, and edit target values.
             </p>
 
             {lookEditorError && (
-              <div
-                style={{
-                  marginBottom: '12px',
-                  padding: '10px',
-                  borderRadius: '6px',
-                  border: '1px solid #a33',
-                  background: '#3a1f1f',
-                  color: '#ffb3b3',
-                  fontSize: '13px'
-                }}
-              >
+              <div className="dashboard-editor-alert">
                 {lookEditorError}
               </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', gap: '8px', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '12px', color: '#888' }}>{lookEditorDraft.length} look{lookEditorDraft.length === 1 ? '' : 's'}</span>
+            <div className="dashboard-look-editor-topbar">
+              <span className="dashboard-look-editor-count">{lookEditorDraft.length} look{lookEditorDraft.length === 1 ? '' : 's'}</span>
               <button
-                className="btn btn-small"
+                className="dashboard-editor-add-btn"
                 onClick={addLookToEditor}
                 disabled={lookEditorSaving}
-                style={{
-                  padding: '6px 12px',
-                  fontSize: '12px',
-                  background: '#2f4f2f',
-                  border: '1px solid #4a7',
-                  color: '#d7ffd7',
-                  opacity: lookEditorSaving ? 0.5 : 1,
-                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
-                }}
               >
                 + Add Look
               </button>
             </div>
 
             {lookEditorDraft.length === 0 ? (
-              <div style={{ padding: '10px', border: '1px solid #444', borderRadius: '6px', color: '#aaa', fontSize: '13px' }}>
+              <div className="dashboard-editor-empty">
                 No looks in this dashboard yet.
               </div>
             ) : (
-              lookEditorDraft.map((lookItem, index) => (
-                <div
-                  key={lookItem.id}
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '10px',
-                    padding: '10px',
-                    border: '1px solid #3d3d3d',
-                    borderRadius: '6px',
-                    marginBottom: '8px',
-                    background: '#1e1e1e',
-                    boxShadow: lookItem.expanded ? '0 0 0 1px #4a90e255 inset' : 'none'
-                  }}
-                >
-                  <div style={{ display: 'grid', gridTemplateColumns: '36px 1fr auto auto auto', gap: '8px', alignItems: 'center' }}>
-                    <div style={{ textAlign: 'center', color: '#888', fontSize: '12px' }}>
-                      {index + 1}
-                    </div>
-                    <input
-                      type="text"
-                      value={lookItem.name}
-                      onChange={(e) => updateLookDraftField(lookItem.id, 'name', e.target.value)}
-                      disabled={lookEditorSaving}
-                      style={{
-                        width: '100%',
-                        background: '#111b35',
-                        border: '1px solid #3a4d76',
-                        borderRadius: '4px',
-                        color: '#f0f0f0',
-                        padding: '8px 10px',
-                        fontSize: '14px'
-                      }}
-                    />
-                    <button
-                      className="btn btn-small"
-                      onClick={() => moveLookDraftItem(index, -1)}
-                      disabled={lookEditorSaving || index === 0}
-                      style={{
-                        width: '36px',
-                        padding: '4px 0',
-                        fontSize: '12px',
-                        background: '#2f2f2f',
-                        border: '1px solid #555',
-                        opacity: (lookEditorSaving || index === 0) ? 0.4 : 1,
-                        cursor: (lookEditorSaving || index === 0) ? 'not-allowed' : 'pointer'
-                      }}
-                      title="Move up"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      className="btn btn-small"
-                      onClick={() => moveLookDraftItem(index, 1)}
-                      disabled={lookEditorSaving || index === lookEditorDraft.length - 1}
-                      style={{
-                        width: '36px',
-                        padding: '4px 0',
-                        fontSize: '12px',
-                        background: '#2f2f2f',
-                        border: '1px solid #555',
-                        opacity: (lookEditorSaving || index === lookEditorDraft.length - 1) ? 0.4 : 1,
-                        cursor: (lookEditorSaving || index === lookEditorDraft.length - 1) ? 'not-allowed' : 'pointer'
-                      }}
-                      title="Move down"
-                    >
-                      ↓
-                    </button>
-                    <button
-                      className="btn btn-small btn-danger"
-                      onClick={() => removeLookFromEditor(lookItem.id)}
-                      disabled={lookEditorSaving}
-                      style={{
-                        width: '36px',
-                        padding: '4px 0',
-                        fontSize: '12px',
-                        background: '#6f2323',
-                        border: '1px solid #a44',
-                        opacity: lookEditorSaving ? 0.4 : 1,
-                        cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
-                      }}
-                      title="Delete look"
-                    >
-                      ×
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '12px', color: '#aaa' }}>Color:</span>
-                    {LOOK_COLORS.map(color => (
-                      <button
-                        key={`${lookItem.id}-${color.id}`}
-                        onClick={() => updateLookDraftField(lookItem.id, 'color', color.id)}
-                        disabled={lookEditorSaving}
-                        style={{
-                          width: '24px',
-                          height: '24px',
-                          borderRadius: '50%',
-                          background: color.hex,
-                          border: lookItem.color === color.id ? '2px solid #fff' : '1px solid #444',
-                          cursor: lookEditorSaving ? 'not-allowed' : 'pointer',
-                          opacity: lookEditorSaving ? 0.5 : 1
-                        }}
-                        title={color.name}
-                      />
-                    ))}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <label style={{ fontSize: '12px', color: '#aaa' }}>UI Type:</label>
-                    <select
-                      value={lookItem.lookUiMode || 'slider'}
-                      onChange={(e) => updateLookDraftField(lookItem.id, 'lookUiMode', e.target.value)}
-                      disabled={lookEditorSaving}
-                      style={{
-                        minWidth: '130px',
-                        background: '#111b35',
-                        border: '1px solid #3a4d76',
-                        borderRadius: '4px',
-                        color: '#f0f0f0',
-                        padding: '6px 10px',
-                        fontSize: '12px'
-                      }}
-                    >
-                      <option value="slider">Slider</option>
-                      <option value="toggle">Toggle</option>
-                      <option value="radio">Radio</option>
-                    </select>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#ddd', cursor: lookEditorSaving ? 'default' : 'pointer' }}>
+              <div className="dashboard-editor-list">
+                {lookEditorDraft.map((lookItem, index) => (
+                  <div
+                    key={lookItem.id}
+                    className={`dashboard-look-editor-card ${lookItem.expanded ? 'is-expanded' : ''}`}
+                  >
+                    <div className="dashboard-look-editor-head">
+                      <div className="dashboard-editor-index">{index + 1}</div>
                       <input
-                        type="checkbox"
-                        checked={lookItem.showRecordButton === true}
-                        onChange={(e) => updateLookDraftField(lookItem.id, 'showRecordButton', e.target.checked)}
+                        type="text"
+                        value={lookItem.name}
+                        onChange={(e) => updateLookDraftField(lookItem.id, 'name', e.target.value)}
                         disabled={lookEditorSaving}
+                        className="dashboard-editor-input"
                       />
-                      Show Rec Button in Dashboard
-                    </label>
-                    <button
-                      className="btn btn-small"
-                      onClick={() => captureLookFromEditor(lookItem.id)}
-                      disabled={lookEditorSaving || !(config?.looks || []).some(look => look.id === lookItem.id)}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: '12px',
-                        background: '#6f2323',
-                        border: '1px solid #a44',
-                        color: '#fff',
-                        opacity: (lookEditorSaving || !(config?.looks || []).some(look => look.id === lookItem.id)) ? 0.4 : 1,
-                        cursor: (lookEditorSaving || !(config?.looks || []).some(look => look.id === lookItem.id)) ? 'not-allowed' : 'pointer'
-                      }}
-                      title={(config?.looks || []).some(look => look.id === lookItem.id) ? 'Record current values into this look' : 'Save first, then record'}
-                    >
-                      ● Record Look
-                    </button>
-                    <button
-                      className="btn btn-small"
-                      onClick={() => toggleLookDraftExpanded(lookItem.id)}
-                      disabled={lookEditorSaving}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: '12px',
-                        background: '#2b2b2b',
-                        border: '1px solid #555',
-                        opacity: lookEditorSaving ? 0.4 : 1,
-                        cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
-                      }}
-                    >
-                      {lookItem.expanded ? 'Hide Values' : 'Edit Values'}
-                    </button>
-                    {!(config?.looks || []).some(look => look.id === lookItem.id) && (
-                      <span style={{ fontSize: '11px', color: '#f0c674' }}>Save first to enable record</span>
-                    )}
-                  </div>
+                      <button
+                        className="dashboard-editor-icon-btn"
+                        onClick={() => moveLookDraftItem(index, -1)}
+                        disabled={lookEditorSaving || index === 0}
+                        title="Move up"
+                      >
+                        ↑
+                      </button>
+                      <button
+                        className="dashboard-editor-icon-btn"
+                        onClick={() => moveLookDraftItem(index, 1)}
+                        disabled={lookEditorSaving || index === lookEditorDraft.length - 1}
+                        title="Move down"
+                      >
+                        ↓
+                      </button>
+                      <button
+                        className="dashboard-editor-icon-btn danger"
+                        onClick={() => removeLookFromEditor(lookItem.id)}
+                        disabled={lookEditorSaving}
+                        title="Delete look"
+                      >
+                        ×
+                      </button>
+                    </div>
 
-                  {lookItem.expanded && (
-                    <div style={{ borderTop: '1px solid #333', paddingTop: '10px' }}>
-                      <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>Target Values (0-100)</div>
-                      {lookEditorFixtureDefinitions.length === 0 ? (
-                        <div style={{ fontSize: '12px', color: '#777', padding: '6px 0' }}>
-                          No fixtures in this dashboard yet.
-                        </div>
-                      ) : (
-                        lookEditorFixtureDefinitions.map(definition => (
-                          <div
-                            key={`${lookItem.id}-${definition.fixtureId}`}
-                            style={{
-                              border: '1px solid #353535',
-                              borderRadius: '6px',
-                              padding: '10px',
-                              marginBottom: '8px',
-                              background: '#1b1b1b'
-                            }}
-                          >
-                            <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px', color: '#ddd' }}>
-                              {definition.fixtureName}
-                            </div>
-                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px' }}>
-                              {definition.channels.map(channel => {
-                                const rawValue = lookItem.targets?.[definition.fixtureId]?.[channel.name];
-                                const channelValue = Number.isFinite(Number(rawValue)) ? Number(rawValue) : 0;
-                                return (
-                                  <label
-                                    key={`${lookItem.id}-${definition.fixtureId}-${channel.name}`}
-                                    style={{
-                                      display: 'flex',
-                                      flexDirection: 'column',
-                                      gap: '4px',
-                                      fontSize: '12px',
-                                      color: '#bbb'
-                                    }}
-                                  >
-                                    <span>{channel.label}</span>
-                                    <input
-                                      type="number"
-                                      min={0}
-                                      max={100}
-                                      step={1}
-                                      value={channelValue}
-                                      onChange={(e) => updateLookDraftTarget(lookItem.id, definition.fixtureId, channel.name, e.target.value)}
-                                      disabled={lookEditorSaving}
-                                      style={{
-                                        width: '100%',
-                                        background: '#101a33',
-                                        border: '1px solid #334',
-                                        borderRadius: '4px',
-                                        color: '#fff',
-                                        padding: '6px 8px',
-                                        fontSize: '12px'
-                                      }}
-                                    />
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        ))
+                    <div className="dashboard-look-editor-meta-row">
+                      <span className="dashboard-look-editor-label">Color:</span>
+                      <div className="dashboard-look-editor-color-list">
+                        {LOOK_COLORS.map(color => (
+                          <button
+                            key={`${lookItem.id}-${color.id}`}
+                            onClick={() => updateLookDraftField(lookItem.id, 'color', color.id)}
+                            disabled={lookEditorSaving}
+                            className={`dashboard-look-color-chip ${lookItem.color === color.id ? 'is-selected' : ''}`}
+                            style={{ '--chip-color': color.hex }}
+                            title={color.name}
+                          />
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="dashboard-look-editor-meta-row">
+                      <label className="dashboard-look-editor-label" htmlFor={`look-ui-mode-${lookItem.id}`}>UI Type:</label>
+                      <select
+                        id={`look-ui-mode-${lookItem.id}`}
+                        value={lookItem.lookUiMode || 'slider'}
+                        onChange={(e) => updateLookDraftField(lookItem.id, 'lookUiMode', e.target.value)}
+                        disabled={lookEditorSaving}
+                        className="dashboard-look-editor-select"
+                      >
+                        <option value="slider">Slider</option>
+                        <option value="toggle">Toggle</option>
+                        <option value="radio">Radio</option>
+                      </select>
+                    </div>
+
+                    <div className="dashboard-look-editor-controls">
+                      <label className="dashboard-look-editor-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={lookItem.showRecordButton === true}
+                          onChange={(e) => updateLookDraftField(lookItem.id, 'showRecordButton', e.target.checked)}
+                          disabled={lookEditorSaving}
+                        />
+                        Show Rec Button in Dashboard
+                      </label>
+                      <div className="dashboard-look-editor-control-btns">
+                        <button
+                          className="dashboard-editor-action-btn record"
+                          onClick={() => captureLookFromEditor(lookItem.id)}
+                          disabled={lookEditorSaving || !(config?.looks || []).some(look => look.id === lookItem.id)}
+                          title={(config?.looks || []).some(look => look.id === lookItem.id) ? 'Record current values into this look' : 'Save first, then record'}
+                        >
+                          ● Record Look
+                        </button>
+                        <button
+                          className="dashboard-editor-action-btn"
+                          onClick={() => toggleLookDraftExpanded(lookItem.id)}
+                          disabled={lookEditorSaving}
+                        >
+                          {lookItem.expanded ? 'Hide Values' : 'Edit Values'}
+                        </button>
+                      </div>
+                      {!(config?.looks || []).some(look => look.id === lookItem.id) && (
+                        <span className="dashboard-look-editor-warning">Save first to enable record</span>
                       )}
                     </div>
-                  )}
-                </div>
-              ))
+
+                    {lookItem.expanded && (
+                      <div className="dashboard-look-editor-targets">
+                        <div className="dashboard-look-editor-targets-title">Target Values (0-100)</div>
+                        {lookEditorFixtureDefinitions.length === 0 ? (
+                          <div className="dashboard-look-editor-targets-empty">
+                            No fixtures in this dashboard yet.
+                          </div>
+                        ) : (
+                          lookEditorFixtureDefinitions.map(definition => (
+                            <div
+                              key={`${lookItem.id}-${definition.fixtureId}`}
+                              className="dashboard-look-editor-target-card"
+                            >
+                              <div className="dashboard-look-editor-target-name">
+                                {definition.fixtureName}
+                              </div>
+                              <div className="dashboard-look-editor-target-grid">
+                                {definition.channels.map(channel => {
+                                  const rawValue = lookItem.targets?.[definition.fixtureId]?.[channel.name];
+                                  const channelValue = Number.isFinite(Number(rawValue)) ? Number(rawValue) : 0;
+                                  return (
+                                    <label
+                                      key={`${lookItem.id}-${definition.fixtureId}-${channel.name}`}
+                                      className="dashboard-look-editor-target-input-wrap"
+                                    >
+                                      <span>{channel.label}</span>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={100}
+                                        step={1}
+                                        value={channelValue}
+                                        onChange={(e) => updateLookDraftTarget(lookItem.id, definition.fixtureId, channel.name, e.target.value)}
+                                        disabled={lookEditorSaving}
+                                        className="dashboard-look-editor-target-input"
+                                      />
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '14px' }}>
+            <div className="dashboard-editor-footer">
               <button
-                className="btn btn-small"
+                className="dashboard-editor-footer-btn"
                 onClick={closeLookSectionEditor}
                 disabled={lookEditorSaving}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  background: '#444',
-                  border: '1px solid #666',
-                  opacity: lookEditorSaving ? 0.5 : 1,
-                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
-                }}
               >
                 Cancel
               </button>
               <button
-                className="btn btn-small btn-primary"
+                className="dashboard-editor-footer-btn save"
                 onClick={saveLookSectionEditor}
                 disabled={lookEditorSaving}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: '12px',
-                  opacity: lookEditorSaving ? 0.5 : 1,
-                  cursor: lookEditorSaving ? 'not-allowed' : 'pointer'
-                }}
               >
                 {lookEditorSaving ? 'Saving...' : 'Save'}
               </button>
@@ -5258,26 +5170,15 @@ const Dashboard = () => {
         </button>
       )}
 
-      {activeLayout.showSettingsButton !== false && isEditorAnywhere && (
-        <button className="settings-btn" onClick={() => navigate('/settings', { state: { fromDashboard: urlSlug } })}>
-          ⚙
-        </button>
+      {!hasCueSection && (
+        <ConnectedUsers
+          activeClients={activeClients}
+          show={activeLayout?.showConnectedUsers !== false}
+          dashboardId={activeLayout?.id}
+          defaultRole={activeLayout?.accessControl?.defaultRole}
+          bottomOffset={16}
+        />
       )}
-
-      {!isEditorAnywhere && (dashboardRole === 'moderator' || role === 'moderator') && (
-        <button className="settings-btn" onClick={() => navigate('/settings?tab=users', { state: { fromDashboard: urlSlug } })} title="Users and Access">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-          </svg>
-        </button>
-      )}
-
-      <ConnectedUsers
-        activeClients={activeClients}
-        show={activeLayout?.showConnectedUsers !== false}
-        dashboardId={activeLayout?.id}
-        defaultRole={activeLayout?.accessControl?.defaultRole}
-      />
     </div>
   );
 };

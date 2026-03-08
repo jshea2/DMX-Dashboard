@@ -1698,16 +1698,16 @@ const SettingsPage = () => {
 
   if (!config) {
     return (
-      <div className="settings-page">
-        <div className="settings-header">
-          <h1>Loading...</h1>
+      <div className="settings-page settings-modern">
+        <div className="settings-header settings-modern-header centered">
+          <h1 className="settings-modern-title">Loading...</h1>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="settings-page">
+    <div className="settings-page settings-modern">
       {/* Unsaved Changes Modal */}
       {showUnsavedModal && (
         <div style={{
@@ -1823,11 +1823,11 @@ const SettingsPage = () => {
         </div>
       )}
 
-      <div className="settings-header" style={{ flexDirection: 'row', justifyContent: config?.showLayouts?.length > 0 ? 'space-between' : 'center', alignItems: 'center', marginBottom: '16px' }}>
-        <h1 style={{ margin: 0 }}>Settings</h1>
+      <div className={`settings-header settings-modern-header ${config?.showLayouts?.length > 0 ? 'has-back' : 'centered'}`}>
+        <h1 className="settings-modern-title">Settings</h1>
         {config?.showLayouts?.length > 0 && (
           <button
-            className="btn"
+            className="btn settings-modern-back-btn"
             onClick={() => {
               if (location.state?.fromDashboard && config?.showLayouts) {
                 // Check if the dashboard still exists
@@ -1842,14 +1842,6 @@ const SettingsPage = () => {
                 handleNavigation('/dashboard');
               }
             }}
-            style={{
-              fontSize: '14px',
-              padding: '8px 16px',
-              background: '#4a90e2',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px'
-            }}
           >
             ← Back to {fromDashboardName || 'Dashboard Menu'}
           </button>
@@ -1857,7 +1849,7 @@ const SettingsPage = () => {
       </div>
 
       {saved && (
-        <div className="card" style={{ background: '#1a5928', marginBottom: '12px' }}>
+        <div className="card settings-modern-save-banner">
           <p style={{ margin: 0, fontSize: '16px' }}>✓ Configuration saved successfully!</p>
         </div>
       )}
@@ -1866,22 +1858,7 @@ const SettingsPage = () => {
       <button
         onClick={handleSave}
         title={hasUnsavedChanges ? "Save Configuration (Unsaved Changes)" : "Save Configuration"}
-        style={{
-          position: 'fixed',
-          bottom: '20px',
-          right: '20px',
-          background: hasUnsavedChanges ? '#e2904a' : '#4ae24a',
-          border: 'none',
-          width: '60px',
-          height: '60px',
-          borderRadius: '50%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer',
-          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.4)',
-          zIndex: 1000
-        }}
+        className={`settings-modern-save-fab ${hasUnsavedChanges ? 'has-unsaved' : 'is-synced'}`}
       >
         <svg width="28" height="28" viewBox="0 0 24 24" fill={hasUnsavedChanges ? 'white' : '#000'}>
           <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/>
@@ -1889,21 +1866,11 @@ const SettingsPage = () => {
       </button>
 
       {/* Mobile Dropdown Navigation */}
-      <div style={{ marginBottom: '16px' }}>
+      <div className="settings-modern-mobile-nav">
         <select
           value={activeTab}
           onChange={(e) => setActiveTab(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '12px 16px',
-            fontSize: '16px',
-            background: '#2a2a2a',
-            color: '#fff',
-            border: '2px solid #4a90e2',
-            borderRadius: '8px',
-            cursor: 'pointer'
-          }}
-          className="mobile-tab-selector"
+          className="mobile-tab-selector settings-modern-mobile-select"
         >
           {TABS.filter(tab => {
             // Editors (anywhere) see all tabs
@@ -1930,19 +1897,9 @@ const SettingsPage = () => {
       </div>
 
       {/* Main Layout: Tabs on Left, Content on Right */}
-      <div style={{ display: 'flex', gap: '12px', minHeight: 'calc(100vh - 200px)' }}>
+      <div className="settings-modern-layout">
         {/* Vertical Tab Navigation - Desktop Only */}
-        <div className="tabs-container desktop-tabs" style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '2px',
-          minWidth: '160px',
-          borderRight: '2px solid #333',
-          paddingRight: '0',
-          position: 'sticky',
-          top: '0',
-          alignSelf: 'flex-start'
-        }}>
+        <div className="tabs-container desktop-tabs settings-modern-tabs">
           {TABS.filter(tab => {
             // Editors (anywhere) see all tabs
             if (isEditorAnywhere) {
@@ -1962,22 +1919,8 @@ const SettingsPage = () => {
           }).map(tab => (
             <button
               key={tab.id}
-              className={`btn tab-btn ${activeTab === tab.id ? 'active' : ''}`}
+              className={`btn tab-btn settings-modern-tab-btn ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
-              style={{
-                padding: '10px 14px',
-                fontSize: '13px',
-                background: activeTab === tab.id ? '#2a2a2a' : 'transparent',
-                border: 'none',
-                borderRight: activeTab === tab.id ? '2px solid #4a90e2' : '2px solid transparent',
-                borderRadius: '0',
-                color: activeTab === tab.id ? '#fff' : '#888',
-                cursor: 'pointer',
-                transition: 'all 0.15s',
-                whiteSpace: 'nowrap',
-                marginRight: '-2px',
-                textAlign: 'left'
-              }}
             >
               {tab.label}
             </button>
@@ -1985,7 +1928,7 @@ const SettingsPage = () => {
         </div>
 
         {/* Tab Content - Scrollable */}
-        <div style={{ flex: 1, overflowY: 'auto', paddingRight: '8px' }}>
+        <div className="settings-modern-content">
 
       {/* Network / Output Tab */}
       {activeTab === 'network' && (
@@ -2839,10 +2782,10 @@ const SettingsPage = () => {
 
       {/* Fixture Profiles Tab */}
       {activeTab === 'profiles' && (
-      <div className="card">
+      <div className="card settings-fixture-profiles-modern">
         <div className="settings-section">
           <h3>Fixture Profiles</h3>
-          <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px' }}>
+          <p className="settings-modern-tab-description">
                 Define reusable fixture types with channel configurations
               </p>
 
@@ -2879,7 +2822,7 @@ const SettingsPage = () => {
             <div 
               key={profile.id} 
               id={`fixture-profile-${profile.id}`}
-              className="fixture-editor" 
+              className="fixture-editor settings-modern-editor-card settings-profile-editor-card" 
               style={{ position: 'relative', padding: isCollapsed ? '12px' : '16px' }}
               draggable
               onDragStart={(e) => handleProfileDragStart(e, profileIndex)}
@@ -2888,20 +2831,21 @@ const SettingsPage = () => {
             >
               {/* Header row - always visible */}
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? '8px' : 0 }}>
-                  <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                <div className="settings-modern-editor-header" style={{ marginBottom: isCollapsed ? '8px' : 0 }}>
+                  <div className="settings-modern-drag-handle" title="Drag to reorder">⋮⋮</div>
                   <span
                     onClick={() => setCollapsedProfiles(prev => ({ ...prev, [profile.id]: !prev[profile.id] }))}
-                    style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                    className="settings-modern-collapse-toggle"
+                    style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
                   >▼</span>
                   <input
                     type="text"
                     value={profile.name}
                     onChange={(e) => updateProfile(profileIndex, 'name', e.target.value)}
                     onClick={(e) => e.stopPropagation()}
-                    style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px', minWidth: 0 }}
+                    className="settings-modern-editor-name-input"
                   />
-                  <div style={{ display: 'flex', gap: '4px' }}>
+                  <div className="settings-modern-editor-actions">
                     <button
                       className="btn btn-secondary btn-small"
                       onClick={() => duplicateProfile(profileIndex)}
@@ -2917,7 +2861,7 @@ const SettingsPage = () => {
                   </div>
                 </div>
                 {isCollapsed && (
-                  <div style={{ paddingLeft: '56px', color: '#666', fontSize: '13px' }}>{channelSummary}</div>
+                  <div className="settings-modern-editor-summary">{channelSummary}</div>
                 )}
               </div>
 
@@ -2941,9 +2885,9 @@ const SettingsPage = () => {
                         key={control.id || idx}
                         style={{
                           marginBottom: '8px',
-                          background: '#1a2a1a',
+                          background: '#142746',
                           borderRadius: '6px',
-                          border: '1px solid #2a4a2a'
+                          border: '1px solid #3a5f93'
                         }}
                         draggable="true"
                         onDragStart={(e) => {
@@ -2955,11 +2899,11 @@ const SettingsPage = () => {
                           e.currentTarget.style.borderColor = '#4a90e2';
                         }}
                         onDragLeave={(e) => {
-                          e.currentTarget.style.borderColor = '#2a4a2a';
+                          e.currentTarget.style.borderColor = '#3a5f93';
                         }}
                         onDrop={(e) => {
                           e.preventDefault();
-                          e.currentTarget.style.borderColor = '#2a4a2a';
+                          e.currentTarget.style.borderColor = '#3a5f93';
                           const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
                           if (fromIndex !== idx && !isNaN(fromIndex)) {
                             const newConfig = { ...config };
@@ -3238,10 +3182,10 @@ const SettingsPage = () => {
                           gap: '12px', 
                           alignItems: 'center', 
                           marginBottom: '8px', 
-                          background: '#1a2a1a', 
+                          background: '#142746', 
                           padding: '10px 12px', 
                           borderRadius: '6px',
-                          border: '1px solid #2a4a2a'
+                          border: '1px solid #3a5f93'
                         }}
                         onDragOver={(e) => { e.preventDefault(); handleChannelDragOver(e, profileIndex, item.startIndex); }}
                         onDrop={(e) => handleChannelDrop(e, profileIndex, item.startIndex)}
@@ -3264,7 +3208,7 @@ const SettingsPage = () => {
                         <span style={{ minWidth: '80px', fontWeight: '500', color: '#888' }}>
                           Ch {startCh}{item.channels.length > 1 ? ` - ${endCh}` : ''}
                         </span>
-                        <span style={{ flex: 1, color: '#6c8', fontWeight: '500' }}>
+                        <span style={{ flex: 1, color: '#8dc4ff', fontWeight: '500' }}>
                           {item.typeName}
                         </span>
                         <button
@@ -3385,17 +3329,17 @@ const SettingsPage = () => {
 
       {/* Patching Tab */}
       {activeTab === 'patching' && (
-      <div className="card">
+      <div className="card settings-patching-modern">
         <div className="settings-section">
           <h3>Fixture Patching</h3>
-          <p style={{ color: '#888', fontSize: '14px', marginBottom: '20px' }}>
+          <p className="settings-modern-tab-description settings-patching-description">
             Configure DMX fixtures and their addresses. Each fixture requires a profile (defines channels)
             and DMX address. Use tags to organize fixtures by location or type. Assign fixtures to
             dashboards to control their visibility. The Patch Viewer below shows the DMX channel layout.
           </p>
 
           {/* Filter Controls */}
-          <div style={{ marginBottom: '20px', padding: '16px', background: '#1a1a2e', borderRadius: '8px', border: '1px solid #333' }}>
+          <div className="settings-patching-filter-panel" style={{ marginBottom: '20px', padding: '16px' }}>
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <div className="form-group" style={{ marginBottom: 0, minWidth: '200px' }}>
                 <label style={{ marginBottom: '4px' }}>Filter by Purpose</label>
@@ -3460,7 +3404,7 @@ const SettingsPage = () => {
                 return (
                   <div
                     key={fixture.id}
-                    className="fixture-editor"
+                    className="fixture-editor settings-modern-editor-card settings-patch-fixture-card"
                     style={{ position: 'relative', padding: isCollapsed ? '12px' : '16px' }}
                     draggable
                     onDragStart={(e) => handleFixtureDragStart(e, index)}
@@ -3469,28 +3413,19 @@ const SettingsPage = () => {
                   >
                     {/* Header row - always visible */}
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? '8px' : 0 }}>
-                        <div style={{ cursor: 'grab', color: '#666', fontSize: '16px', padding: '4px' }} title="Drag to reorder">⋮⋮</div>
+                      <div className="settings-modern-editor-header" style={{ marginBottom: isCollapsed ? '8px' : 0 }}>
+                        <div className="settings-modern-drag-handle" title="Drag to reorder">⋮⋮</div>
                         <span
                           onClick={() => setCollapsedFixtures(prev => ({ ...prev, [fixture.id]: !prev[fixture.id] }))}
-                          style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                          className="settings-modern-collapse-toggle"
+                          style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
                         >▼</span>
                         <input
                           type="text"
                           value={fixture.name}
                           onChange={(e) => updateFixture(originalIndex, 'name', e.target.value)}
                           onClick={(e) => e.stopPropagation()}
-                          style={{
-                            flex: 1,
-                            fontWeight: '500',
-                            background: '#1a1a2e',
-                            border: '1px solid #333',
-                            borderRadius: '4px',
-                            padding: '8px 12px',
-                            color: '#f0f0f0',
-                            fontSize: '16px',
-                            minWidth: 0
-                          }}
+                          className="settings-modern-editor-name-input"
                         />
                         <button
                           className="btn btn-secondary btn-small"
@@ -3506,7 +3441,7 @@ const SettingsPage = () => {
                         >×</button>
                       </div>
                       {isCollapsed && (
-                        <div style={{ paddingLeft: '56px', color: '#666', fontSize: '13px' }}>{summary}</div>
+                        <div className="settings-modern-editor-summary">{summary}</div>
                       )}
                     </div>
 
@@ -4225,10 +4160,10 @@ const SettingsPage = () => {
 
       {/* Show Layout Editor Tab */}
       {activeTab === 'showlayout' && (
-      <div className="card">
+      <div className="card settings-layout-editor">
         <div className="settings-section">
           <h3>Dashboard Layout Editor</h3>
-          <p style={{ fontSize: '14px', color: '#888', marginBottom: '16px', marginTop: '12px' }}>
+          <p className="settings-layout-editor-description">
             Create custom layouts that control what appears on the main lighting control page.
             Each layout can have its own branding, colors, and selection of looks/fixtures.
             Access layouts at <code>/home</code> or <code>/layout-name</code>.
@@ -4240,30 +4175,30 @@ const SettingsPage = () => {
             return (
               <div
                 key={layout.id}
-                className="fixture-editor"
+                className="fixture-editor settings-layout-card"
                 style={{
                   position: 'relative',
                   padding: isCollapsed ? '12px' : '16px',
-                  border: '1px solid #444',
-                  background: '#333',
                   marginBottom: '12px'
                 }}
               >
                 {/* Header row - always visible */}
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: isCollapsed ? '8px' : 0 }}>
+                  <div className="settings-layout-card-header" style={{ marginBottom: isCollapsed ? '8px' : 0 }}>
                     <span
                       onClick={() => setCollapsedLayouts(prev => ({ ...prev, [layout.id]: !prev[layout.id] }))}
-                      style={{ cursor: 'pointer', color: '#888', transition: 'transform 0.2s', transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
+                      className="settings-layout-collapse-toggle"
+                      style={{ transform: isCollapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}
                     >▼</span>
                     <input
                       type="text"
                       value={layout.name}
                       onChange={(e) => updateShowLayout(layoutIndex, 'name', e.target.value)}
                       onClick={(e) => e.stopPropagation()}
-                      style={{ flex: 1, fontWeight: '500', background: '#1a1a2e', border: '1px solid #333', borderRadius: '4px', padding: '8px 12px', color: '#f0f0f0', fontSize: '16px', minWidth: 0 }}
+                      className="settings-layout-name-input"
+                      style={{ flex: 1, minWidth: 0 }}
                     />
-                    <div style={{ display: 'flex', gap: '4px' }}>
+                    <div className="settings-layout-card-actions">
                       <button
                         className="btn btn-secondary btn-small"
                         onClick={() => duplicateShowLayout(layoutIndex)}
@@ -4279,7 +4214,7 @@ const SettingsPage = () => {
                     </div>
                   </div>
                   {isCollapsed && (
-                    <div style={{ paddingLeft: '32px', color: '#666', fontSize: '13px' }}>
+                    <div className="settings-layout-card-summary" style={{ paddingLeft: '32px' }}>
                       {(layout.sections || []).length} sections
                     </div>
                   )}
@@ -4289,13 +4224,13 @@ const SettingsPage = () => {
                 {!isCollapsed && (
                 <>
                   {/* Layout Properties */}
-                  <div style={{ marginTop: '16px', padding: '12px', background: layout.backgroundColor || '#1a1a2e', borderRadius: '6px', border: '1px solid #333' }}>
-                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Layout Properties</h4>
+                  <div className="settings-layout-panel settings-layout-properties-panel" style={{ marginTop: '16px' }}>
+                    <h4 className="settings-layout-panel-title">Layout Properties</h4>
 
                     {/* Logo Upload */}
                     <div className="form-group">
                       <label>Logo Header</label>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <div className="settings-layout-inline-row">
                         <label className="btn btn-secondary btn-small" style={{ marginBottom: 0, cursor: 'pointer' }}>
                           Upload Image
                           <input
@@ -4328,17 +4263,19 @@ const SettingsPage = () => {
                     {/* Background Color */}
                     <div className="form-group">
                       <label>Background Color</label>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <div className="settings-layout-inline-row">
                         <input
                           type="color"
                           value={layout.backgroundColor || '#1a1a2e'}
                           onChange={(e) => updateShowLayout(layoutIndex, 'backgroundColor', e.target.value)}
-                          style={{ width: '40px', height: '32px', cursor: 'pointer', padding: 0, border: '1px solid #444' }}
+                          className="settings-layout-color-picker"
+                          style={{ width: '40px', height: '32px', cursor: 'pointer', padding: 0 }}
                         />
                         <input
                           type="text"
                           value={layout.backgroundColor || '#1a1a2e'}
                           onChange={(e) => updateShowLayout(layoutIndex, 'backgroundColor', e.target.value)}
+                          className="settings-layout-color-input"
                           style={{ width: '90px', fontFamily: 'monospace', fontSize: '13px' }}
                         />
                         <button
@@ -4407,17 +4344,18 @@ const SettingsPage = () => {
                   </div>
 
                   {/* Dashboard URL and QR Code */}
-                  <div style={{ marginTop: '16px', padding: '12px', background: '#1a1a2e', borderRadius: '6px', border: '1px solid #333' }}>
-                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Dashboard Access</h4>
+                  <div className="settings-layout-panel" style={{ marginTop: '16px' }}>
+                    <h4 className="settings-layout-panel-title">Dashboard Access</h4>
 
                     <div className="form-group">
                       <label>Dashboard URL</label>
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <div className="settings-layout-inline-row">
                         <input
                           type="text"
                           value={`${window.location.origin}/dashboard/${layout.urlSlug}`}
                           readOnly
-                          style={{ flex: 1, fontFamily: 'monospace', fontSize: '12px', background: '#252538', border: '1px solid #333', color: '#4a90e2' }}
+                          className="settings-layout-url-input"
+                          style={{ flex: 1, fontFamily: 'monospace', fontSize: '12px' }}
                         />
                         <button
                           className="btn btn-secondary btn-small"
@@ -4435,18 +4373,12 @@ const SettingsPage = () => {
                     {/* QR Code for each network interface */}
                     {networkInterfaces.length > 0 && (
                       <div style={{ marginTop: '12px' }}>
-                        <label style={{ display: 'block', marginBottom: '8px' }}>QR Codes</label>
-                        <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                        <label className="settings-layout-inline-label">QR Codes</label>
+                        <div className="settings-layout-qr-grid">
                           {networkInterfaces.map((iface) => (
                             <div
                               key={iface.address}
-                              style={{
-                                padding: '8px',
-                                background: '#252538',
-                                borderRadius: '6px',
-                                border: '1px solid #333',
-                                textAlign: 'center'
-                              }}
+                              className="settings-layout-qr-card"
                             >
                               <div style={{ fontSize: '11px', fontWeight: '600', marginBottom: '6px', color: '#888' }}>
                                 {iface.name}
@@ -4485,8 +4417,8 @@ const SettingsPage = () => {
                   </div>
 
                   {/* Dashboard Users */}
-                  <div style={{ marginTop: '16px', padding: '12px', background: '#1a1a2e', borderRadius: '6px', border: '1px solid #333' }}>
-                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Users with Access</h4>
+                  <div className="settings-layout-panel" style={{ marginTop: '16px' }}>
+                    <h4 className="settings-layout-panel-title">Users with Access</h4>
                     <p style={{ fontSize: '12px', color: '#888', marginBottom: '12px' }}>
                       Manage which users can access this dashboard. Click a user to change their role.
                     </p>
@@ -4497,7 +4429,7 @@ const SettingsPage = () => {
                       const dashboardAllowsAll = !layout.accessControl?.requireExplicitAccess;
                       return hasExplicitAccess || dashboardAllowsAll;
                     }).length > 0 ? (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <div className="settings-layout-user-list">
                         {config.clients.filter(client => {
                           const hasExplicitAccess = client.dashboardAccess && client.dashboardAccess[layout.id];
                           const dashboardAllowsAll = !layout.accessControl?.requireExplicitAccess;
@@ -4520,16 +4452,8 @@ const SettingsPage = () => {
                           return (
                             <div
                               key={client.id}
-                              style={{
-                                padding: '8px',
-                                background: '#252538',
-                                borderRadius: '4px',
-                                border: `1px solid ${isActive ? '#4ae24a' : '#333'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '8px',
-                                fontSize: '12px'
-                              }}
+                              className={`settings-layout-user-row ${isActive ? 'is-active' : ''}`}
+                              style={{ fontSize: '12px' }}
                             >
                               <div
                                 style={{
@@ -4658,16 +4582,16 @@ const SettingsPage = () => {
                         })}
                       </div>
                     ) : (
-                      <p style={{ fontSize: '12px', color: '#666', fontStyle: 'italic', padding: '8px', background: '#252538', borderRadius: '4px' }}>
+                      <p className="settings-layout-empty-note" style={{ fontSize: '12px', fontStyle: 'italic', padding: '8px' }}>
                         No users have access to this dashboard yet.
                       </p>
                     )}
                   </div>
 
                   {/* Sections Configuration */}
-                  <div style={{ marginTop: '16px' }}>
-                    <h4 style={{ fontSize: '14px', marginBottom: '12px', color: '#4a90e2' }}>Sections</h4>
-                    <p style={{ fontSize: '12px', color: '#888', marginBottom: '12px' }}>
+                  <div className="settings-layout-sections-wrap" style={{ marginTop: '16px' }}>
+                    <h4 className="settings-layout-panel-title">Sections</h4>
+                    <p className="settings-layout-section-description">
                       Sections organize your layout. Static sections (Looks/Fixtures) can only contain their type. Custom sections can mix any items.
                     </p>
 
@@ -4684,45 +4608,29 @@ const SettingsPage = () => {
                             onDragStart={(e) => handleSectionDragStart(e, layoutIndex, sectionIndex)}
                             onDragOver={(e) => handleSectionDragOver(e, layoutIndex, sectionIndex)}
                             onDrop={(e) => handleSectionDrop(e, layoutIndex, sectionIndex)}
-                            style={{
-                              background: '#252538',
-                              padding: '12px',
-                              borderRadius: '6px',
-                              marginBottom: '12px',
-                              border: isStatic ? '1px solid #4a4a6a' : '1px solid #444'
-                            }}
+                            className={`settings-layout-section-card ${isStatic ? 'is-static' : 'is-custom'}`}
                           >
                             {/* Section Header */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                              <div style={{ color: '#666', fontSize: '14px', cursor: 'grab' }}>☰</div>
+                            <div className="settings-layout-section-header">
+                              <div className="settings-layout-drag-handle">☰</div>
                               <input
                                 type="text"
                                 value={section.name}
                                 onChange={(e) => updateSection(layoutIndex, sectionIndex, 'name', e.target.value)}
                                 disabled={isStatic}
-                                style={{
-                                  flex: 1,
-                                  background: isStatic ? '#1a1a2e80' : '#1a1a2e',
-                                  border: '1px solid #333',
-                                  borderRadius: '4px',
-                                  padding: '6px 10px',
-                                  color: '#f0f0f0',
-                                  fontSize: '14px',
-                                  fontWeight: '500'
-                                }}
+                                className="settings-layout-section-name-input"
                               />
                               {!isStatic && (
                                 <button
-                                  className="btn btn-danger btn-small"
+                                  className="btn btn-danger btn-small settings-layout-section-remove-btn"
                                   onClick={() => removeSection(layoutIndex, sectionIndex)}
-                                  style={{ padding: '4px 8px', fontSize: '12px' }}
                                   title="Delete Section"
                                 >×</button>
                               )}
                             </div>
 
                             {/* Add Item Dropdown - for both custom and static sections */}
-                            <div style={{ marginBottom: '8px' }}>
+                            <div className="settings-layout-section-add-wrap">
                               <select
                                 onChange={(e) => {
                                   const value = e.target.value;
@@ -4746,15 +4654,7 @@ const SettingsPage = () => {
                                   }
                                   e.target.value = '';
                                 }}
-                                style={{
-                                  width: '100%',
-                                  background: '#1a1a2e',
-                                  border: '1px solid #333',
-                                  borderRadius: '4px',
-                                  padding: '6px 10px',
-                                  color: '#f0f0f0',
-                                  fontSize: '12px'
-                                }}
+                                className="settings-layout-section-add-select"
                               >
                                 <option value="">+ Add Item to Section...</option>
                                 {/* For static sections, only show relevant type */}
@@ -4807,9 +4707,9 @@ const SettingsPage = () => {
                             </div>
 
                             {/* Items in Section */}
-                            <div style={{ background: '#1a1a2e', padding: '8px', borderRadius: '4px' }}>
+                            <div className="settings-layout-items-list">
                               {section.items.length === 0 && (
-                                <p style={{ color: '#666', fontSize: '12px', margin: 0, padding: '8px', textAlign: 'center' }}>
+                                <p className="settings-layout-items-empty">
                                   No items in this section
                                 </p>
                               )}
@@ -4834,31 +4734,13 @@ const SettingsPage = () => {
                                       onDragStart={(e) => handleSectionItemDragStart(e, layoutIndex, sectionIndex, itemIndex)}
                                       onDragOver={(e) => handleSectionItemDragOver(e, layoutIndex, sectionIndex, itemIndex)}
                                       onDrop={(e) => handleSectionItemDrop(e, layoutIndex, sectionIndex, itemIndex)}
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        padding: '6px 8px',
-                                        marginBottom: '4px',
-                                        background: '#2a3a2a',
-                                        borderRadius: '4px',
-                                        border: '1px solid #4a6a4a',
-                                        cursor: 'grab'
-                                      }}
+                                      className={`settings-layout-item-row ${itemType === 'look' ? 'is-look' : 'is-fixture'}`}
                                     >
-                                      <div style={{ color: '#666', fontSize: '12px' }}>☰</div>
-                                      <span style={{
-                                        fontSize: '9px',
-                                        padding: '2px 5px',
-                                        background: itemType === 'look' ? '#4a4a6a' : '#6a4a4a',
-                                        borderRadius: '3px',
-                                        color: '#ccc',
-                                        textTransform: 'uppercase',
-                                        fontWeight: '600'
-                                      }}>
+                                      <div className="settings-layout-item-drag">☰</div>
+                                      <span className={`settings-layout-item-type ${itemType === 'look' ? 'is-look' : 'is-fixture'}`}>
                                         {itemType}
                                       </span>
-                                      <span style={{ flex: 1, color: '#e0e0e0', fontSize: '12px' }}>
+                                      <span className="settings-layout-item-name">
                                         {itemName}
                                       </span>
                                       {/* UI mode dropdown for look items */}
@@ -4866,15 +4748,7 @@ const SettingsPage = () => {
                                         <select
                                           value={item.lookUiMode || 'slider'}
                                           onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'lookUiMode', e.target.value)}
-                                          style={{
-                                            padding: '4px 6px',
-                                            fontSize: '11px',
-                                            background: '#2a2a2a',
-                                            color: '#f0f0f0',
-                                            border: '1px solid #444',
-                                            borderRadius: '4px',
-                                            marginLeft: '8px'
-                                          }}
+                                          className="settings-layout-item-select"
                                           title="Look UI Mode"
                                         >
                                           <option value="slider">Slider</option>
@@ -4899,15 +4773,7 @@ const SettingsPage = () => {
                                           <select
                                             value={item.displayMode || 'sliders'}
                                             onChange={(e) => updateSectionItem(layoutIndex, sectionIndex, item.id, 'displayMode', e.target.value)}
-                                            style={{
-                                              padding: '4px 6px',
-                                              fontSize: '11px',
-                                              background: '#2a2a2a',
-                                              color: '#f0f0f0',
-                                              border: '1px solid #444',
-                                              borderRadius: '4px',
-                                              marginLeft: '8px'
-                                            }}
+                                            className="settings-layout-item-select"
                                             title="Display Mode"
                                           >
                                             <option value="sliders">Sliders</option>
@@ -4917,9 +4783,8 @@ const SettingsPage = () => {
                                       })()}
 
                                       <button
-                                        className="btn btn-danger btn-small"
+                                        className="btn btn-danger btn-small settings-layout-item-remove-btn"
                                         onClick={() => removeItemFromSection(layoutIndex, sectionIndex, itemIndex)}
-                                        style={{ padding: '2px 6px', fontSize: '11px' }}
                                         title="Remove from Section"
                                       >×</button>
                                     </div>

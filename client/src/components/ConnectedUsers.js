@@ -1,29 +1,61 @@
 import React from 'react';
 
-const ConnectedUsers = ({ activeClients, show, dashboardId, defaultRole }) => {
+const ConnectedUsers = ({
+  activeClients,
+  show,
+  dashboardId,
+  defaultRole,
+  bottomOffset = 16,
+  inline = false,
+  compact = false,
+  className = ''
+}) => {
   if (!show || !activeClients || activeClients.length === 0) {
     return null;
   }
 
+  const containerStyle = inline ? {
+    position: 'relative',
+    bottom: 'auto',
+    left: 'auto',
+    background: 'rgba(22, 34, 63, 0.94)',
+    border: '1px solid rgba(102, 130, 174, 0.5)',
+    borderRadius: '12px',
+    padding: compact ? '8px 10px' : '10px 12px',
+    zIndex: 'auto',
+    minWidth: compact ? '150px' : '180px',
+    boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.05)'
+  } : {
+    position: 'fixed',
+    bottom: `${Math.max(0, Number(bottomOffset) || 0)}px`,
+    left: '16px',
+    background: '#1a1a2e',
+    border: '2px solid #333',
+    borderRadius: '8px',
+    padding: '12px',
+    zIndex: 1000,
+    minWidth: '180px',
+    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)'
+  };
+
   return (
     <div
+      className={className}
       style={{
-        position: 'fixed',
-        bottom: '16px',
-        left: '16px',
-        background: '#1a1a2e',
-        border: '2px solid #333',
-        borderRadius: '8px',
-        padding: '12px',
-        zIndex: 1000,
-        minWidth: '180px',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)'
+        ...containerStyle
       }}
     >
-      <div style={{ marginBottom: '8px', fontSize: '12px', fontWeight: '600', color: '#888', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+      <div style={{
+        marginBottom: compact ? '6px' : '8px',
+        fontSize: compact ? '11px' : '12px',
+        fontWeight: '600',
+        color: '#90a5c8',
+        textTransform: 'uppercase',
+        letterSpacing: '0.5px'
+      }}>
         Connected Users
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: compact ? '4px' : '6px' }}>
         {activeClients.map((client) => {
           let effectiveRole = client.role;
           if (client.role === 'editor') {
@@ -42,7 +74,7 @@ const ConnectedUsers = ({ activeClients, show, dashboardId, defaultRole }) => {
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              fontSize: '13px'
+              fontSize: compact ? '12px' : '13px'
             }}
           >
             <div
@@ -60,7 +92,7 @@ const ConnectedUsers = ({ activeClients, show, dashboardId, defaultRole }) => {
             <span
               style={{
                 fontSize: '10px',
-                padding: '2px 4px',
+                padding: compact ? '2px 4px' : '2px 4px',
                 borderRadius: '3px',
                 background: effectiveRole === 'editor' ? '#2a4a2a' :
                            effectiveRole === 'moderator' ? '#4a2a4a' :
