@@ -115,6 +115,7 @@ const DEFAULT_CONFIG = {
       id: 'look1',
       name: 'Warm Dramatic',
       showRecordButton: true,
+      excludeFromCues: false,
       color: 'orange',
       tags: [],
       targets: {
@@ -128,6 +129,7 @@ const DEFAULT_CONFIG = {
       id: 'look2',
       name: 'Cool Dramatic',
       showRecordButton: true,
+      excludeFromCues: false,
       color: 'cyan',
       tags: [],
       targets: {
@@ -141,6 +143,7 @@ const DEFAULT_CONFIG = {
       id: 'look3',
       name: 'Vibrant',
       showRecordButton: true,
+      excludeFromCues: false,
       color: 'purple',
       tags: [],
       targets: {
@@ -612,6 +615,9 @@ class Config {
       config.looks.forEach(look => {
         if (!look.tags) {
           look.tags = [];
+        }
+        if (typeof look.excludeFromCues !== 'boolean') {
+          look.excludeFromCues = false;
         }
       });
     }

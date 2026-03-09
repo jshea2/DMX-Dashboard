@@ -1452,6 +1452,7 @@ const Dashboard = () => {
           color: look.color || 'blue',
           lookUiMode: item.lookUiMode || 'slider',
           showRecordButton: look.showRecordButton === true,
+          excludeFromCues: look.excludeFromCues === true,
           targets: normalizeTargets(look.targets),
           tags: Array.isArray(look.tags) ? [...look.tags] : [],
           expanded: false
@@ -1470,6 +1471,7 @@ const Dashboard = () => {
           color: look.color || 'blue',
           lookUiMode: 'slider',
           showRecordButton: look.showRecordButton === true,
+          excludeFromCues: look.excludeFromCues === true,
           targets: normalizeTargets(look.targets),
           tags: Array.isArray(look.tags) ? [...look.tags] : [],
           expanded: false
@@ -1541,6 +1543,7 @@ const Dashboard = () => {
         color: 'blue',
         lookUiMode: 'slider',
         showRecordButton: true,
+        excludeFromCues: false,
         targets: buildLookTargetsTemplate(activeLayout, config),
         tags: [],
         expanded: true
@@ -1639,6 +1642,7 @@ const Dashboard = () => {
           name: (draftLook.name || '').trim() || 'New Look',
           color: draftLook.color || 'blue',
           showRecordButton: draftLook.showRecordButton === true,
+          excludeFromCues: draftLook.excludeFromCues === true,
           targets: sanitizeTargets(draftLook.targets || {}),
           tags: Array.isArray(draftLook.tags) ? [...draftLook.tags] : [],
           dashboardId: layout.id
@@ -2297,6 +2301,7 @@ const Dashboard = () => {
     const { fixtureUpdates, fixtureHsvUpdates } = buildHomeStateForFixtures(fixtureIds);
     const clearedLookOverrides = buildLookOverrideClearPayload();
     const clearedCueOverrides = buildCueOverrideClearPayload();
+    const firstCueId = activeCueList?.cues?.[0]?.id || null;
 
     sendDashboardUpdate({
       cuePlayback: {
@@ -2314,6 +2319,8 @@ const Dashboard = () => {
       cueOverrides: Object.keys(clearedCueOverrides).length > 0 ? clearedCueOverrides : undefined
     });
 
+    setSelectedCueId(firstCueId);
+    requestCueWindowScroll(null, firstCueId);
     clearTrackingForFixtures(fixtureIds);
     clearCueTransitionTimer();
   }, [
@@ -2325,8 +2332,11 @@ const Dashboard = () => {
     buildCueOverrideClearPayload,
     sendDashboardUpdate,
     activeCueList?.id,
+    activeCueList?.cues,
+    requestCueWindowScroll,
     clearTrackingForFixtures,
-    clearCueTransitionTimer
+    clearCueTransitionTimer,
+    setSelectedCueId
   ]);
 
   const activateCueAtIndex = useCallback((cueIndex, options = {}) => {
@@ -2634,16 +2644,48 @@ const Dashboard = () => {
   const captureCurrentCueTargets = useCallback(() => {
     const fixtureDefs = getLayoutFixtureDefinitions(activeLayout, config);
     const capturedTargets = {};
+    const activeExcludedLookIds = new Set(
+      (config?.looks || [])
+        .filter(look => look?.excludeFromCues === true && Number(state?.looks?.[look.id] || 0) > 0)
+        .map(look => look.id)
+    );
+
+    const clampPercent = (value) => {
+      const numeric = Number(value);
+      if (!Number.isFinite(numeric)) return 0;
+      return Math.max(0, Math.min(100, numeric));
+    };
+
     fixtureDefs.forEach(definition => {
       capturedTargets[definition.fixtureId] = {};
       definition.channels.forEach(channel => {
         const key = `${definition.fixtureId}.${channel.name}`;
-        const displayValue = htpMetadataRef.current?.[key]?.displayValue ?? 0;
-        capturedTargets[definition.fixtureId][channel.name] = Math.round(displayValue * 100) / 100;
+        const metadata = htpMetadataRef.current?.[key] || {};
+        const displayValue = clampPercent(metadata.displayValue ?? 0);
+        const contributors = Array.isArray(metadata.contributors) ? metadata.contributors : [];
+        const hasExcludedContributor = contributors.some(contributor => (
+          contributor?.lookId && activeExcludedLookIds.has(contributor.lookId)
+        ));
+
+        if (!hasExcludedContributor) {
+          capturedTargets[definition.fixtureId][channel.name] = Math.round(displayValue * 100) / 100;
+          return;
+        }
+
+        const directFixtureValue = clampPercent(state?.fixtures?.[definition.fixtureId]?.[channel.name] ?? 0);
+        const cueValue = clampPercent(
+          getCueTransitionChannelValue(definition.fixtureId, channel.name, directFixtureValue)
+        );
+        const maxNonExcludedLook = contributors
+          .filter(contributor => !contributor?.lookId || !activeExcludedLookIds.has(contributor.lookId))
+          .reduce((maxValue, contributor) => Math.max(maxValue, clampPercent(contributor?.value ?? 0)), 0);
+
+        const filteredValue = Math.max(directFixtureValue, cueValue, maxNonExcludedLook);
+        capturedTargets[definition.fixtureId][channel.name] = Math.round(filteredValue * 100) / 100;
       });
     });
     return capturedTargets;
-  }, [activeLayout, config, getLayoutFixtureDefinitions]);
+  }, [activeLayout, config, getLayoutFixtureDefinitions, state?.looks, state?.fixtures, getCueTransitionChannelValue]);
 
   const goToCueByNumber = useCallback((overrideNumber) => {
     if (!activeCueList || !Array.isArray(activeCueList.cues) || activeCueList.cues.length === 0) return;
@@ -3080,12 +3122,28 @@ const Dashboard = () => {
     : visibleSections.filter(section => !(section.type === 'static' && section.staticType === 'cues'));
   const cueList = activeCueList;
   const hasCueEntries = Boolean(cueList && cueList.cues.length > 0);
+  const formatCueSeconds = (secondsValue) => {
+    const safeSeconds = Number.isFinite(Number(secondsValue)) ? Math.max(0, Number(secondsValue)) : 0;
+    const rounded = Math.round(safeSeconds * 10) / 10;
+    const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+    return `${text}s`;
+  };
+  const activeCueFadeTimeSeconds = Number.isFinite(Number(activeCue?.fadeTime))
+    ? Math.max(0, Number(activeCue.fadeTime))
+    : 0;
+  const selectedCueFadeTimeSeconds = Number.isFinite(Number(selectedCue?.fadeTime))
+    ? Math.max(0, Number(selectedCue.fadeTime))
+    : 0;
   const activeCueLabel = activeCue && cuePlayback.status !== 'stopped'
-    ? `${activeCue.number || activeCueIndex + 1} | ${activeCue.name || `Cue ${activeCueIndex + 1}`}`
-    : 'Cue Out';
+    ? `${activeCue.number || activeCueIndex + 1} | ${activeCue.name || `Cue ${activeCueIndex + 1}`} • ${formatCueSeconds(activeCueFadeTimeSeconds)}`
+    : `Cue Out • ${formatCueSeconds(0)}`;
   const selectedCueLabel = selectedCue
-    ? `${selectedCue.number || selectedCueIndex + 1} | ${selectedCue.name || `Cue ${selectedCueIndex + 1}`}`
-    : '--';
+    ? `${selectedCue.number || selectedCueIndex + 1} | ${selectedCue.name || `Cue ${selectedCueIndex + 1}`} • ${formatCueSeconds(selectedCueFadeTimeSeconds)}`
+    : `-- • ${formatCueSeconds(0)}`;
+  const cueTransitionProgressNormalized = Math.max(0, Math.min(1, Number(cueTransitionProgress) || 0));
+  const showCueCardTransitionFill = cueTransitionProgressNormalized > 0
+    && (isCueTransitioning || cuePlayback.status === 'paused');
+  const cueTransitionFillWidthPercent = cueTransitionProgressNormalized * 100;
   const canOpenSettings = activeLayout?.showSettingsButton !== false
     && (isEditorAnywhere || dashboardRole === 'moderator' || role === 'moderator');
 
@@ -3100,7 +3158,24 @@ const Dashboard = () => {
               className="dashboard-modern-logo"
             />
           ) : (
-            <span className="dashboard-modern-app-icon" aria-hidden="true">⚡</span>
+            <span className="dashboard-modern-app-icon" aria-hidden="true">
+              <svg
+                className="dashboard-modern-app-icon-svg"
+                xmlns="http://www.w3.org/2000/svg"
+                width="24"
+                height="24"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" />
+                <path d="M9 18h6" />
+                <path d="M10 22h4" />
+              </svg>
+            </span>
           )}
           {activeLayout.showName && (
             <h1>{activeLayout.name}</h1>
@@ -3283,7 +3358,7 @@ const Dashboard = () => {
                         <div className="cue-page-list-name">{cueList.name}</div>
                         <div className={`cue-page-active-label ${activeCue && cuePlayback.status !== 'stopped' ? 'is-active' : ''}`}>
                           {activeCue && cuePlayback.status !== 'stopped'
-                            ? `Active Cue: ${activeCue.number || activeCueIndex + 1} | ${activeCue.name || `Cue ${activeCueIndex + 1}`}`
+                            ? `Active Cue: ${activeCue.number || activeCueIndex + 1} | ${activeCue.name || `Cue ${activeCueIndex + 1}`} • ${formatCueSeconds(activeCueFadeTimeSeconds)}`
                             : 'Active Cue: Cue Out'}
                         </div>
                       </div>
@@ -3433,9 +3508,9 @@ const Dashboard = () => {
                                   display: 'grid',
                                   gridTemplateColumns: isCompactCueLayout
                                     ? `${isMobileCueLayout ? '74px' : '84px'} minmax(0, 1fr)`
-                                    : '84px minmax(140px, 1fr) 86px 150px auto',
+                                    : '84px minmax(140px, 1fr) minmax(132px, auto) minmax(120px, auto) auto',
                                   gridTemplateAreas: isCompactCueLayout
-                                    ? '"number name" "status time" "actions actions"'
+                                    ? '"number name" "status status" "time time" "actions actions"'
                                     : 'none',
                                   alignItems: 'center',
                                   gap: '8px'
@@ -4555,12 +4630,22 @@ const Dashboard = () => {
             <div className="dashboard-cue-dock-minimal-row">
               <div className="dashboard-cue-dock-top">
                 <div className={`dashboard-cue-state-card ${activeCue && cuePlayback.status !== 'stopped' ? 'active' : ''}`}>
-                  <span className="dashboard-cue-state-label">Active Cue</span>
-                  <span className="dashboard-cue-state-value">{activeCueLabel}</span>
+                  {showCueCardTransitionFill && (
+                    <span
+                      className={`dashboard-cue-state-progress ${isCueTransitioning ? 'is-transitioning' : 'is-paused'}`}
+                      style={{ width: `${cueTransitionFillWidthPercent}%` }}
+                    />
+                  )}
+                  <div className="dashboard-cue-state-card-inner">
+                    <span className="dashboard-cue-state-label">Active Cue</span>
+                    <span className="dashboard-cue-state-value">{activeCueLabel}</span>
+                  </div>
                 </div>
                 <div className="dashboard-cue-state-card">
-                  <span className="dashboard-cue-state-label">Next Cue</span>
-                  <span className="dashboard-cue-state-value">{selectedCueLabel}</span>
+                  <div className="dashboard-cue-state-card-inner">
+                    <span className="dashboard-cue-state-label">Next Cue</span>
+                    <span className="dashboard-cue-state-value">{selectedCueLabel}</span>
+                  </div>
                 </div>
               </div>
               <div className="dashboard-cue-dock-side">
@@ -4579,12 +4664,22 @@ const Dashboard = () => {
             <>
               <div className="dashboard-cue-dock-top">
                 <div className={`dashboard-cue-state-card ${activeCue && cuePlayback.status !== 'stopped' ? 'active' : ''}`}>
-                  <span className="dashboard-cue-state-label">Active Cue</span>
-                  <span className="dashboard-cue-state-value">{activeCueLabel}</span>
+                  {showCueCardTransitionFill && (
+                    <span
+                      className={`dashboard-cue-state-progress ${isCueTransitioning ? 'is-transitioning' : 'is-paused'}`}
+                      style={{ width: `${cueTransitionFillWidthPercent}%` }}
+                    />
+                  )}
+                  <div className="dashboard-cue-state-card-inner">
+                    <span className="dashboard-cue-state-label">Active Cue</span>
+                    <span className="dashboard-cue-state-value">{activeCueLabel}</span>
+                  </div>
                 </div>
                 <div className="dashboard-cue-state-card">
-                  <span className="dashboard-cue-state-label">Next Cue</span>
-                  <span className="dashboard-cue-state-value">{selectedCueLabel}</span>
+                  <div className="dashboard-cue-state-card-inner">
+                    <span className="dashboard-cue-state-label">Next Cue</span>
+                    <span className="dashboard-cue-state-value">{selectedCueLabel}</span>
+                  </div>
                 </div>
               </div>
               <div className="dashboard-cue-dock-bottom">
@@ -5061,6 +5156,15 @@ const Dashboard = () => {
                           disabled={lookEditorSaving}
                         />
                         Show Rec Button in Dashboard
+                      </label>
+                      <label className="dashboard-look-editor-checkbox">
+                        <input
+                          type="checkbox"
+                          checked={lookItem.excludeFromCues === true}
+                          onChange={(e) => updateLookDraftField(lookItem.id, 'excludeFromCues', e.target.checked)}
+                          disabled={lookEditorSaving}
+                        />
+                        Exclude from Cue Recording
                       </label>
                       <div className="dashboard-look-editor-control-btns">
                         <button

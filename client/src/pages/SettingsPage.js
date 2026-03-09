@@ -1678,6 +1678,7 @@ const SettingsPage = () => {
       id: newId,
       name: 'New Look',
       showRecordButton: true,
+      excludeFromCues: false,
       targets
     });
     setConfig(newConfig);
@@ -4017,6 +4018,16 @@ const SettingsPage = () => {
                   onChange={(e) => updateLook(originalLookIndex, 'showRecordButton', e.target.checked)}
                 />
                 <label htmlFor={`showRecordBtn-${look.id}`}>Show Record Button in Main UI</label>
+              </div>
+
+              <div className="form-group checkbox-group">
+                <input
+                  type="checkbox"
+                  id={`excludeFromCues-${look.id}`}
+                  checked={look.excludeFromCues === true}
+                  onChange={(e) => updateLook(originalLookIndex, 'excludeFromCues', e.target.checked)}
+                />
+                <label htmlFor={`excludeFromCues-${look.id}`}>Exclude from Cue Recording</label>
               </div>
 
               <div className="form-group">
