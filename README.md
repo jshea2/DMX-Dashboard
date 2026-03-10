@@ -2,121 +2,143 @@
 
 <img src="assets/icons/icon.png" alt="DMX Dashboard" width="140" />
 
-#### A desktop lighting controller with dashboard‑style UI to manage DMX fixtures, Looks, live overrides, and HTP blending. Supports multiple devices, users, and dashboards.
+#### A desktop lighting controller with a modern dashboard UI for DMX fixtures, Looks, live overrides, and cue playback.
 
 ## Download
 
-- [Download DMX Dashboard](https://github.com/jshea2/DMX-Dashboard/releases/latest)
+- [Download DMX Dashboard (latest release)](https://github.com/jshea2/DMX-Dashboard/releases/latest)
 
-<img width="306" height="506" alt="Screenshot 2026-01-19 at 11 37 48 PM" src="https://github.com/user-attachments/assets/35d572d0-08ff-414f-aa4e-4f373c1f116a" />
+## What’s New (v1.1.x)
 
+- Modern dashboard and settings visual redesign.
+- New cue dock workflow with **GO**, **Back/Pause**, **Cue Out**, **Update Cue**, **Go to Cue**, and **Add Cue**.
+- Cue list page with active/next cue status and transition progress visuals.
+- Dashboard-level fixture and look editors (rename/reorder directly from dashboard).
+- Per-look **UI Type** (`Slider`, `Toggle`, `Radio`) plus **Exclude from Cue Recording**.
+- New control blocks including **Pan/Tilt 8-bit**, **Pan/Tilt 16-bit**, **CCT**, **Tint**, and **Dimmer + RGB**.
+- Cross-platform Electron builds with auto-update support and release metadata.
 
-## Install
+## Core Features
 
-- macOS: open the `.dmg` and drag **DMX Dashboard** to Applications
-- Windows: run the `.exe` installer
-- Linux: run the `.AppImage` (mark executable if needed)
+### Dashboard Control
 
-## Quick Start
-
-1. Open **Settings**
-2. Create Fixture Profiles (Control Blocks)
-3. Patch fixtures (universe + start address)
-4. Build a Dashboard layout (sections + items)
-5. Save Looks and start controlling
-
-## Settings Overview
-
-### Fixture Profiles (Control Blocks)
-
-- Create a profile that matches your fixture’s channel order.
-- Each profile is built from Control Blocks (Intensity, RGB/RGBW, CCT, Tint, Zoom, etc.).
-- Defaults are stored per control block and used for Looks blending and Clear behavior.
-
-### Fixtures (Patch)
-
-- Assign each fixture a profile.
-- Set **Universe** and **Start Address**.
-- The patch viewer displays the active universe and used addresses.
+- Build dashboards from sections (Looks, Fixtures, Cue List, and custom).
+- Clean live control UI with glow/gradient status on cards.
+- Per-fixture clear and override behavior.
+- Fixture profile link/sync mode for same-profile fixtures.
 
 ### Looks
 
-- Looks store target values per fixture and blend with defaults.
-- Record a look from the current live output.
-- Looks blend with other looks using HTP (highest value wins per channel).
+- Looks are dashboard-scoped presets with HTP blending.
+- Record from current output.
+- Set look color accent and UI mode.
+- Toggle whether Rec button appears in main dashboard UI.
+- Optionally exclude specific looks from cue recording.
 
-### Dashboards
+### Cue Lists
 
-- Create multiple dashboards with custom layout.
-- Each dashboard contains **sections** (Looks, Fixtures, or mixed).
-- Each item can be configured with a UI type (toggle vs slider).
-- Clear buttons can apply to Looks or Fixtures per section.
+- Each dashboard can point to a cue list.
+- Cues store fixture states and transition times.
+- GO advances through selected cues, with pause/resume during transitions.
+- Cue Out returns to fixture defaults/out state.
+- Update Active Cue writes current overridden fixture state into active cue.
+- Keyboard shortcut options per cue list: Spacebar GO, Shift+Spacebar Fast GO, Option/Alt+Spacebar Back/Pause.
+- Default new cue transition time is configurable per cue list.
 
-### Users & Access
+### Fixture Profiles + Patch
 
-Roles:
-- **Viewer**: read-only, can view dashboards but cannot change values.
-- **Controller**: can operate dashboards and fixtures.
-- **Editor**: full access, can edit settings, layouts, and profiles.
+- Build profiles from control blocks and per-block defaults.
+- Supported blocks include Intensity, RGB/RGBW, Dimmer + RGB, CCT, Tint, Zoom, Pan/Tilt (8-bit), and Pan/Tilt (16-bit).
+- Patch fixtures by Universe and Start Address.
+- Patch Viewer and DMX Output Viewer for verification.
 
-Access options:
-- Default role for new clients.
-- Per-dashboard access control (optional explicit access).
-- Access requests show up in **Users and Access**.
+### Multi-User Access
 
-## Looks + Overrides (HTP)
+- Role-based access across dashboards: Viewer, Controller, Moderator, Editor.
+- Global access matrix and per-dashboard access controls.
+- Configurable default role for new clients.
+- Local server identity is protected as editor.
 
-- Looks blend from default values to saved targets.
-- If you move a slider while a look is active, that channel enters override.
-- Use **Clear** to release overrides and return to active Looks.
+### Networking + Output
 
-## Network Setup
+- sACN (E1.31) and Art-Net output.
+- Bind output to a specific network interface.
+- Adjustable output FPS.
 
-- Choose sACN or Art-Net in **Settings → Network**.
-- Set a bind address if you need a specific interface.
-- Default server port is `3000`.
+### Desktop App + Updates
 
-## Files & Config
+- Runs as Electron app on macOS, Windows, and Linux.
+- Optional auto-check for updates on launch.
+- Offline-safe updater behavior (skips checks without internet).
 
-- Configuration is stored on disk and saved automatically.
-- On macOS it lives in your app data folder:
-  `~/Library/Application Support/DMX Dashboard/config.json`
+## Install
 
-## Troubleshooting
+- macOS: open `.dmg` and drag **DMX Dashboard** to Applications.
+- Windows: run the `.exe` installer.
+- Linux: run the `.AppImage` (mark executable if needed).
 
-- **No output?** Check network protocol, universe, and bind address.
-- **Wrong fixture response?** Verify profile channel order + patch address.
-- **Can’t connect?** Make sure the server port isn’t blocked by firewall.
+## Quick Start
+
+1. Open **Settings**.
+2. Create fixture profiles in **Fixture Profiles**.
+3. Patch fixtures in **Patch**.
+4. Configure dashboards and sections in **Dashboard** settings.
+5. Build and record looks in **Looks**.
+6. Configure cue list behavior in **Cue List**.
+7. Return to dashboard and run live control.
+
+## Settings Tabs
+
+- **Dashboard**: dashboard layouts, sections, item assignment, look UI types, lock edit options.
+- **Users and Access**: roles, permissions, per-dashboard matrix, pending requests.
+- **Networking / IO**: protocol, interface bind, output tuning, update-check toggle.
+- **Fixture Profiles**: control blocks and default values.
+- **Patch**: fixture profile assignment, addressing, dashboard assignment.
+- **Looks**: look creation, recording, color, visibility of rec button, cue exclusion.
+- **Cue List**: cue shortcuts and default transition timing for new cues.
+- **Export / Import**: save/load full config JSON.
+
+## Data + Config
+
+Configuration is saved automatically.
+
+- macOS: `~/Library/Application Support/DMX Dashboard/config.json`
+- Windows: `%APPDATA%/DMX Dashboard/config.json`
+- Linux: `~/.config/DMX Dashboard/config.json`
+
+## Reset to Defaults
+
+- Use **Settings → Export / Import → Reset** to restore default app settings.
+- This action replaces current configuration.
 
 ## Build From Source
 
-```
+```bash
 npm install
 npm run electron:build
 ```
 
-## Releases
+## Release Build (Recommended)
 
-- Latest download: https://github.com/jshea2/DMX-Dashboard/releases/latest
-
-### Build release artifacts
-
-```
+```bash
 npm run electron:build:release
 ```
 
-### Publish a release
+This generates release-ready assets in `dist/release`.
 
-**Option A (GitHub web UI):**
-1. Go to https://github.com/jshea2/DMX-Dashboard/releases
-2. Click **Draft a new release**
-3. Tag format: `vX.Y.Z` (example `v1.0.1`)
-4. Upload release assets from `dist/`
+## Publishing Releases
 
-**Option B (GitHub CLI):**
-```
-gh release create v1.0.1 dist/* --title "v1.0.1" --notes "Release notes here"
-```
+1. Go to: https://github.com/jshea2/DMX-Dashboard/releases
+2. Draft a new release.
+3. Use tag format: `vX.Y.Z` (example: `v1.1.1`).
+4. Upload all files from `dist/release` (including `latest*.yml` and `.blockmap` files).
+5. Publish release.
+
+## Troubleshooting
+
+- No output: verify protocol, universe, destination, and bind interface.
+- Wrong fixture behavior: verify profile channel order and patch addressing.
+- Update issues: ensure release includes required `latest*.yml` metadata and matching artifacts.
 
 ## License
 
