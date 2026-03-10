@@ -1,6 +1,6 @@
 {
     "name": "dmx-dashboard",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Web-based DMX lighting control for faculty",
     "main": "electron/main.js",
     "scripts": {
@@ -62,20 +62,8 @@
             "icon": "assets/icons/icon.png",
             "artifactName": "DMX-Dashboard-${version}-Mac-${arch}.${ext}",
             "target": [
-                {
-                    "target": "zip",
-                    "arch": [
-                        "x64",
-                        "arm64"
-                    ]
-                },
-                {
-                    "target": "dmg",
-                    "arch": [
-                        "x64",
-                        "arm64"
-                    ]
-                }
+                "zip",
+                "dmg"
             ]
         },
         "win": {
