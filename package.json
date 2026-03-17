@@ -55,6 +55,8 @@
         "files": [
             "electron/**",
             "server/**",
+            "!server/config.json",
+            "!server/config.backup.json",
             "client/build/**",
             "package.json"
         ],

@@ -1,10 +1,17 @@
-const { app, BrowserWindow, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const dns = require('dns').promises;
 const { fork } = require('child_process');
+const { createBlankConfig, createDemoConfig } = require('../server/projectTemplates');
+const {
+  PROJECT_FILE_EXTENSION,
+  mergeProjectIntoConfig,
+  parseProjectFileContent,
+  serializeProjectFile
+} = require('../server/projectFile');
 
 const DEFAULT_PORT = 3000;
 const isDev = !app.isPackaged;
@@ -14,6 +21,9 @@ let serverProcess = null;
 let serverLogPath = null;
 let serverLogStream = null;
 let updaterLogPath = null;
+let mainWindow = null;
+let serverPort = DEFAULT_PORT;
+let currentProjectPath = null;
 
 const logUpdater = (message) => {
   try {
@@ -24,6 +34,96 @@ const logUpdater = (message) => {
   } catch (err) {
     // Ignore logging failures.
   }
+};
+
+const getProjectMetaPath = () => path.join(app.getPath('userData'), 'project-meta.json');
+
+const loadProjectMeta = () => {
+  try {
+    const raw = fs.readFileSync(getProjectMetaPath(), 'utf8');
+    const meta = JSON.parse(raw);
+    currentProjectPath = typeof meta?.currentProjectPath === 'string' && meta.currentProjectPath
+      ? meta.currentProjectPath
+      : null;
+  } catch (err) {
+    currentProjectPath = null;
+  }
+};
+
+const saveProjectMeta = () => {
+  try {
+    fs.writeFileSync(
+      getProjectMetaPath(),
+      JSON.stringify({ currentProjectPath }, null, 2)
+    );
+  } catch (err) {
+    console.warn('[Electron] Failed to save project metadata:', err.message);
+  }
+};
+
+const setCurrentProjectPath = (nextPath) => {
+  currentProjectPath = nextPath || null;
+  saveProjectMeta();
+};
+
+const getApiBaseUrl = () => `http://127.0.0.1:${serverPort}`;
+
+const fetchCurrentConfig = async () => {
+  const response = await fetch(`${getApiBaseUrl()}/api/config`);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch current config (${response.status})`);
+  }
+  return response.json();
+};
+
+const pushConfigToServer = async (nextConfig) => {
+  const response = await fetch(`${getApiBaseUrl()}/api/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(nextConfig)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update config (${response.status})`);
+  }
+
+  return response.json();
+};
+
+const navigateWindowHome = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.executeJavaScript(
+    'window.location.assign("/")',
+    true
+  ).catch(() => {});
+};
+
+const confirmProjectReplace = async (message, detail) => {
+  const result = await dialog.showMessageBox({
+    type: 'warning',
+    title: 'Replace current project?',
+    message,
+    detail,
+    buttons: ['Replace Project', 'Cancel'],
+    defaultId: 0,
+    cancelId: 1
+  });
+
+  return result.response === 0;
+};
+
+const normalizeSavePath = (filePath) => {
+  if (!filePath) return null;
+  if (path.extname(filePath).toLowerCase() === `.${PROJECT_FILE_EXTENSION}`) {
+    return filePath;
+  }
+  return `${filePath}.${PROJECT_FILE_EXTENSION}`;
+};
+
+const saveProjectToPath = async (targetPath) => {
+  const currentConfig = await fetchCurrentConfig();
+  fs.writeFileSync(targetPath, serializeProjectFile(currentConfig));
+  setCurrentProjectPath(targetPath);
 };
 
 app.setName('DMX Dashboard');
@@ -111,6 +211,205 @@ const getPortFromUrl = (urlValue) => {
   }
 };
 
+const handleNewProject = async () => {
+  const confirmed = await confirmProjectReplace(
+    'Load a blank project?',
+    'This replaces the current fixtures, looks, cue lists, and dashboard layouts with a blank project.'
+  );
+  if (!confirmed) return;
+
+  const currentConfig = await fetchCurrentConfig();
+  const nextConfig = mergeProjectIntoConfig(currentConfig, createBlankConfig());
+  await pushConfigToServer(nextConfig);
+  setCurrentProjectPath(null);
+  navigateWindowHome();
+};
+
+const handleLoadDemo = async () => {
+  const confirmed = await confirmProjectReplace(
+    'Load the demo project?',
+    'This replaces the current project with the built-in demo so you can explore the app.'
+  );
+  if (!confirmed) return;
+
+  const currentConfig = await fetchCurrentConfig();
+  const nextConfig = mergeProjectIntoConfig(currentConfig, createDemoConfig());
+  await pushConfigToServer(nextConfig);
+  setCurrentProjectPath(null);
+  navigateWindowHome();
+};
+
+const handleOpenProject = async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: 'Open Project',
+    properties: ['openFile'],
+    filters: [
+      { name: 'DMX Dashboard Project', extensions: [PROJECT_FILE_EXTENSION] },
+      { name: 'JSON Files', extensions: ['json'] }
+    ]
+  });
+
+  if (canceled || !filePaths?.[0]) return;
+
+  const confirmed = await confirmProjectReplace(
+    'Open this project file?',
+    'This replaces the current fixtures, looks, cue lists, and dashboard layouts with the selected project file.'
+  );
+  if (!confirmed) return;
+
+  const fileContents = fs.readFileSync(filePaths[0], 'utf8');
+  const importedProject = parseProjectFileContent(fileContents);
+  const currentConfig = await fetchCurrentConfig();
+  const nextConfig = mergeProjectIntoConfig(currentConfig, importedProject);
+  await pushConfigToServer(nextConfig);
+  setCurrentProjectPath(filePaths[0]);
+  navigateWindowHome();
+};
+
+const handleSaveProjectAs = async () => {
+  const defaultPath = currentProjectPath
+    ? currentProjectPath
+    : path.join(app.getPath('documents'), `DMX Dashboard Project.${PROJECT_FILE_EXTENSION}`);
+
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: 'Save Project As',
+    defaultPath,
+    filters: [
+      { name: 'DMX Dashboard Project', extensions: [PROJECT_FILE_EXTENSION] }
+    ]
+  });
+
+  if (canceled || !filePath) return;
+  await saveProjectToPath(normalizeSavePath(filePath));
+};
+
+const handleSaveProject = async () => {
+  if (!currentProjectPath) {
+    await handleSaveProjectAs();
+    return;
+  }
+
+  await saveProjectToPath(currentProjectPath);
+};
+
+const buildApplicationMenu = () => {
+  const fileMenu = {
+    label: 'File',
+    submenu: [
+      {
+        label: 'New Project',
+        accelerator: 'CmdOrCtrl+N',
+        click: () => handleNewProject().catch((err) => {
+          dialog.showErrorBox('New Project Failed', err.message);
+        })
+      },
+      {
+        label: 'Open Project...',
+        accelerator: 'CmdOrCtrl+O',
+        click: () => handleOpenProject().catch((err) => {
+          dialog.showErrorBox('Open Project Failed', err.message);
+        })
+      },
+      {
+        label: 'Save',
+        accelerator: 'CmdOrCtrl+S',
+        click: () => handleSaveProject().catch((err) => {
+          dialog.showErrorBox('Save Failed', err.message);
+        })
+      },
+      {
+        label: 'Save As...',
+        accelerator: 'CmdOrCtrl+Shift+S',
+        click: () => handleSaveProjectAs().catch((err) => {
+          dialog.showErrorBox('Save As Failed', err.message);
+        })
+      },
+      { type: 'separator' },
+      {
+        label: 'Load Demo',
+        accelerator: 'CmdOrCtrl+Shift+D',
+        click: () => handleLoadDemo().catch((err) => {
+          dialog.showErrorBox('Load Demo Failed', err.message);
+        })
+      },
+      ...(process.platform === 'darwin'
+        ? []
+        : [{ type: 'separator' }, { role: 'quit' }])
+    ]
+  };
+
+  const template = [
+    ...(process.platform === 'darwin'
+      ? [{
+          label: app.name,
+          submenu: [
+            { role: 'about' },
+            { type: 'separator' },
+            { role: 'services' },
+            { type: 'separator' },
+            { role: 'hide' },
+            { role: 'hideOthers' },
+            { role: 'unhide' },
+            { type: 'separator' },
+            { role: 'quit' }
+          ]
+        }]
+      : []),
+    fileMenu,
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
+    {
+      label: 'Window',
+      submenu: process.platform === 'darwin'
+        ? [
+            { role: 'minimize' },
+            { role: 'zoom' },
+            { type: 'separator' },
+            { role: 'front' }
+          ]
+        : [
+            { role: 'minimize' },
+            { role: 'close' }
+          ]
+    },
+    {
+      label: 'Help',
+      submenu: [
+        {
+          label: 'DMX Dashboard Releases',
+          click: () => shell.openExternal(RELEASES_URL)
+        }
+      ]
+    }
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+};
+
 const startServer = () => {
   const configPath = getConfigPath();
   const serverEntry = path.join(app.getAppPath(), 'server', 'server.js');
@@ -167,6 +466,7 @@ const showLoadError = (win, message) => {
 
 const createWindow = async () => {
   const port = startServer();
+  serverPort = port;
   const startUrl = process.env.ELECTRON_START_URL || `http://127.0.0.1:${port}`;
   const waitPort = getPortFromUrl(startUrl) || port;
   let serverReady = true;
@@ -191,6 +491,8 @@ const createWindow = async () => {
     }
   });
 
+  mainWindow = win;
+
   if (serverReady) {
     win.loadURL(startUrl);
   } else {
@@ -204,6 +506,12 @@ const createWindow = async () => {
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
+  });
+
+  win.on('closed', () => {
+    if (mainWindow === win) {
+      mainWindow = null;
+    }
   });
 };
 
@@ -284,6 +592,8 @@ const checkForUpdatesOnLaunch = async () => {
 };
 
 app.whenReady().then(async () => {
+  loadProjectMeta();
+  buildApplicationMenu();
   await createWindow();
   setupAutoUpdater();
   checkForUpdatesOnLaunch();

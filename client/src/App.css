@@ -22,10 +22,16 @@
   max-width: none;
   margin: 0;
   padding: 16px clamp(14px, 2.4vw, 34px) 24px;
+  box-shadow: inset 0 0 0 100vmax rgba(23, 24, 30, 0);
+  transition: box-shadow 2s ease;
   background:
     radial-gradient(circle at 15% -20%, rgba(45, 122, 255, 0.24), rgba(6, 10, 24, 0)),
     radial-gradient(circle at 85% 0%, rgba(10, 40, 130, 0.32), rgba(7, 11, 24, 0)),
     linear-gradient(160deg, #050b1a 0%, #070f23 42%, #091433 72%, #060c1f 100%);
+}
+
+.app.dashboard-modern.blackout-active {
+  box-shadow: inset 0 0 0 100vmax rgba(26, 26, 30, 0.72);
 }
 
 .app.dashboard-modern.dashboard-has-cue-dock {
@@ -64,6 +70,14 @@
   object-fit: cover;
   box-shadow: 0 10px 24px rgba(35, 107, 255, 0.35);
   flex-shrink: 0;
+}
+
+.dashboard-modern-logo-default {
+  border-radius: 0;
+  object-fit: contain;
+  box-shadow: none;
+  width: 40px;
+  height: 40px;
 }
 
 .dashboard-modern-app-icon {
@@ -1078,8 +1092,35 @@
   flex: 0 0 auto;
 }
 
+.dashboard-cue-action-btn .cue-btn-icon.cue-btn-icon-out {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.cue-btn-svg-icon {
+  width: 1em;
+  height: 1em;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.2;
+}
+
+.dashboard-cue-action-btn.go-to-cue .cue-btn-svg-icon {
+  width: 1.22em;
+  height: 1.22em;
+  stroke-width: 2.5;
+}
+
 .dashboard-cue-action-btn.go .cue-btn-icon {
   font-size: 18px;
+}
+
+.dashboard-cue-action-btn.go-to-cue .cue-btn-icon {
+  font-size: 21px;
 }
 
 .dashboard-cue-action-btn.go .cue-btn-text {
@@ -1144,6 +1185,10 @@
     font-size: 24px;
   }
 
+  .dashboard-cue-dock .dashboard-cue-action-btn.go-to-cue .cue-btn-icon {
+    font-size: 24px;
+  }
+
   .dashboard-modern .cue-page-list-name {
     font-size: 29px;
   }
@@ -1173,6 +1218,13 @@
 
   .dashboard-modern-header-actions {
     gap: 8px;
+  }
+
+  .dashboard-modern .blackout-btn {
+    min-height: 40px;
+    border-radius: 12px;
+    padding: 8px 14px;
+    font-size: clamp(15px, 4.2vw, 18px);
   }
 
   .dashboard-modern-settings-btn {
@@ -1278,6 +1330,10 @@
 
   .dashboard-cue-dock .dashboard-cue-action-btn.go .cue-btn-icon {
     font-size: 19px;
+  }
+
+  .dashboard-cue-dock .dashboard-cue-action-btn.go-to-cue .cue-btn-icon {
+    font-size: 20px;
   }
 
   .dashboard-cue-utility-btn {
@@ -1452,6 +1508,17 @@
 
   .dashboard-cue-dock .dashboard-cue-action-btn.go .cue-btn-icon {
     font-size: 17px;
+  }
+
+  .dashboard-cue-dock .dashboard-cue-action-btn.go-to-cue .cue-btn-icon {
+    font-size: 18px;
+  }
+
+  .dashboard-modern .blackout-btn {
+    min-height: 36px;
+    border-radius: 11px;
+    padding: 7px 12px;
+    font-size: 14px;
   }
 
   .dashboard-editor-header {

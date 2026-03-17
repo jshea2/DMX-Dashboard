@@ -3147,22 +3147,36 @@ const Dashboard = () => {
   const cueTransitionFillWidthPercent = cueTransitionProgressNormalized * 100;
   const canOpenSettings = activeLayout?.showSettingsButton !== false
     && (isEditorAnywhere || dashboardRole === 'moderator' || role === 'moderator');
+  const cueRefreshIcon = (
+    <svg className="cue-btn-svg-icon cue-btn-svg-refresh" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 12a9 9 0 0 1 15.35-6.36" />
+      <path d="M21 12a9 9 0 0 1-15.35 6.36" />
+      <path d="M18.35 5.64V9.5h3.85" />
+      <path d="M5.65 18.36V14.5H1.8" />
+    </svg>
+  );
+  const cueSearchIcon = (
+    <svg className="cue-btn-svg-icon cue-btn-svg-search" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="11" cy="11" r="5.5" />
+      <path d="m15.5 15.5 4 4" />
+    </svg>
+  );
 
   return (
-    <div className={`app dashboard-modern ${hasCueSection ? 'dashboard-has-cue-dock' : ''} ${showCuePage ? 'dashboard-cue-page-open' : ''}`}>
+    <div className={`app dashboard-modern ${state.blackout ? 'blackout-active' : ''} ${hasCueSection ? 'dashboard-has-cue-dock' : ''} ${showCuePage ? 'dashboard-cue-page-open' : ''}`}>
       <div className="header dashboard-modern-header">
         <div className="dashboard-modern-brand">
           {activeLayout.logo ? (
             <img
               src={activeLayout.logo}
               alt="Logo"
-              className="dashboard-modern-logo"
+              className="dashboard-modern-logo dashboard-modern-logo-default"
             />
           ) : (
             <img
               src={dashboardLogo}
               alt="DMX Dashboard"
-              className="dashboard-modern-logo"
+              className="dashboard-modern-logo dashboard-modern-logo-default"
             />
           )}
           {activeLayout.showName && (
@@ -3375,15 +3389,15 @@ const Dashboard = () => {
                           onClick={goCueHome}
                           disabled={!canControlCues}
                         >
-                          <span className="cue-btn-icon" aria-hidden="true">✕</span>
+                          <span className="cue-btn-icon cue-btn-icon-out" aria-hidden="true">OUT</span>
                           <span className="cue-btn-text">Cue Out</span>
                         </button>
                         <button
-                          className="dashboard-cue-action-btn cue-page-action-btn"
+                          className="dashboard-cue-action-btn cue-page-action-btn go-to-cue"
                           onClick={openGoToCueModal}
                           disabled={!canControlCues || cueList.cues.length === 0}
                         >
-                          <span className="cue-btn-icon" aria-hidden="true">⌕</span>
+                          <span className="cue-btn-icon" aria-hidden="true">{cueSearchIcon}</span>
                           <span className="cue-btn-text">Go to Cue</span>
                         </button>
                         <button
@@ -3391,7 +3405,7 @@ const Dashboard = () => {
                           onClick={updateActiveCue}
                           disabled={!canRecordCues || !activeCue || !hasActiveCueOverrides}
                         >
-                          <span className="cue-btn-icon" aria-hidden="true">↯</span>
+                          <span className="cue-btn-icon" aria-hidden="true">{cueRefreshIcon}</span>
                           <span className="cue-btn-text">Update Active Cue</span>
                         </button>
                         <button
@@ -4693,7 +4707,7 @@ const Dashboard = () => {
                   onClick={updateActiveCue}
                   disabled={!canRecordCues || !activeCue || !hasActiveCueOverrides}
                 >
-                  <span className="cue-btn-icon" aria-hidden="true">↯</span>
+                  <span className="cue-btn-icon" aria-hidden="true">{cueRefreshIcon}</span>
                   <span className="cue-btn-text">Update Cue</span>
                 </button>
                 <button
@@ -4701,15 +4715,15 @@ const Dashboard = () => {
                   onClick={goCueHome}
                   disabled={!canControlCues}
                 >
-                  <span className="cue-btn-icon" aria-hidden="true">✕</span>
+                  <span className="cue-btn-icon cue-btn-icon-out" aria-hidden="true">OUT</span>
                   <span className="cue-btn-text">Cue Out</span>
                 </button>
                 <button
-                  className="dashboard-cue-action-btn"
+                  className="dashboard-cue-action-btn go-to-cue"
                   onClick={openGoToCueModal}
                   disabled={!canControlCues || !hasCueEntries}
                 >
-                  <span className="cue-btn-icon" aria-hidden="true">⌕</span>
+                  <span className="cue-btn-icon" aria-hidden="true">{cueSearchIcon}</span>
                   <span className="cue-btn-text">Go to Cue</span>
                 </button>
                 <button

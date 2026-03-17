@@ -1435,7 +1435,7 @@ const SettingsPage = () => {
   // Helper to find next available address in a universe
   const getNextAddress = (fixtures, universe, profileId, profiles) => {
     const profile = profiles?.find(p => p.id === profileId);
-    const channelCount = profile?.channels?.length || 1;
+    const channelCount = getProfileChannelCount(profile);
     
     // Get all fixtures in this universe
     const universeFixtures = fixtures.filter(f => f.universe === universe);
@@ -1445,7 +1445,7 @@ const SettingsPage = () => {
     let maxEndAddress = 0;
     universeFixtures.forEach(f => {
       const fProfile = profiles?.find(p => p.id === f.profileId);
-      const fChannelCount = fProfile?.channels?.length || 1;
+      const fChannelCount = getProfileChannelCount(fProfile);
       const endAddress = f.startAddress + fChannelCount - 1;
       if (endAddress > maxEndAddress) maxEndAddress = endAddress;
     });
@@ -1506,7 +1506,7 @@ const SettingsPage = () => {
   const openDuplicateModal = (index) => {
     const fixture = config.fixtures[index];
     const profile = config.fixtureProfiles?.find(p => p.id === fixture.profileId);
-    const channelCount = profile?.channels?.length || 1;
+    const channelCount = getProfileChannelCount(profile);
     setDuplicateFixtureIndex(index);
     setDuplicateCount(1);
     setDuplicateAddressOffset(channelCount); // Default offset is channel count
@@ -1524,7 +1524,7 @@ const SettingsPage = () => {
     const newConfig = { ...config };
     const sourceFixture = newConfig.fixtures[duplicateFixtureIndex];
     const profile = newConfig.fixtureProfiles?.find(p => p.id === sourceFixture.profileId);
-    const channelCount = profile?.channels?.length || 1;
+    const channelCount = getProfileChannelCount(profile);
     
     for (let i = 0; i < duplicateCount; i++) {
       const newId = `fixture-${Date.now()}-${i}`;
@@ -4920,44 +4920,61 @@ const SettingsPage = () => {
       {activeTab === 'export' && (
         <div className="card">
           <div className="settings-section">
-            <h3>Export / Import Configuration</h3>
+            <h3>Project Files</h3>
             <p style={{ color: '#888', marginBottom: '24px' }}>
-              Save your entire configuration (fixtures, looks, layouts, etc.) to a JSON file or load a previously saved configuration.
+              Save this dashboard project to a <code>.dmxd</code> file or load a previously saved project file. App-level preferences such as connected clients and local server settings are not included.
             </p>
 
             <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap' }}>
               <div style={{ flex: '1', minWidth: '250px' }}>
-                <h4 style={{ marginBottom: '12px' }}>Export Configuration</h4>
+                <h4 style={{ marginBottom: '12px' }}>Save Project File</h4>
                 <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '12px' }}>
-                  Download your complete configuration as a JSON file.
+                  Download the current project as a portable <code>.dmxd</code> file.
                 </p>
                 <button
                   className="btn btn-primary"
                   onClick={() => {
-                    const dataStr = JSON.stringify(config, null, 2);
+                    const project = {
+                      fixtureProfiles: config?.fixtureProfiles || [],
+                      fixtures: config?.fixtures || [],
+                      looks: config?.looks || [],
+                      cueLists: config?.cueLists || [],
+                      showLayouts: config?.showLayouts || [],
+                      ...(config?.activeLayoutId ? { activeLayoutId: config.activeLayoutId } : {})
+                    };
+                    if (config?.network) {
+                      project.network = config.network;
+                    }
+                    const projectDocument = {
+                      format: 'dmx-dashboard-project',
+                      version: 1,
+                      exportedAt: new Date().toISOString(),
+                      project
+                    };
+                    const dataStr = JSON.stringify(projectDocument, null, 2);
                     const dataBlob = new Blob([dataStr], { type: 'application/json' });
                     const url = URL.createObjectURL(dataBlob);
                     const link = document.createElement('a');
                     link.href = url;
-                    link.download = `dmx-config-${new Date().toISOString().split('T')[0]}.json`;
+                    link.download = `dmx-dashboard-${new Date().toISOString().split('T')[0]}.dmxd`;
                     link.click();
                     URL.revokeObjectURL(url);
                   }}
                 >
-                  📥 Export Configuration
+                  📥 Save Project File
                 </button>
               </div>
 
               <div style={{ flex: '1', minWidth: '250px' }}>
-                <h4 style={{ marginBottom: '12px' }}>Import Configuration</h4>
+                <h4 style={{ marginBottom: '12px' }}>Open Project File</h4>
                 <p style={{ fontSize: '14px', color: '#aaa', marginBottom: '12px' }}>
-                  Load a configuration file. This will replace your current settings.
+                  Load a saved project file. This will replace the current fixtures, looks, cue lists, layouts, and network output settings.
                 </p>
                 <label className="btn btn-secondary" style={{ cursor: 'pointer', display: 'inline-block' }}>
-                  📤 Import Configuration
+                  📤 Open Project File
                   <input
                     type="file"
-                    accept=".json"
+                    accept=".dmxd,.json"
                     style={{ display: 'none' }}
                     onChange={(e) => {
                       const file = e.target.files[0];
@@ -4965,27 +4982,34 @@ const SettingsPage = () => {
                         const reader = new FileReader();
                         reader.onload = (event) => {
                           try {
-                            const importedConfig = JSON.parse(event.target.result);
-                            if (window.confirm('This will replace your current configuration. Are you sure?')) {
-                              setConfig(importedConfig);
-                              // Optionally auto-save
-                              fetch('/api/config', {
+                            const parsed = JSON.parse(event.target.result);
+                            if (window.confirm('This will replace the current project loaded in the app. Are you sure?')) {
+                              fetch('/api/config/import', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(importedConfig)
+                                body: JSON.stringify(parsed)
                               })
-                                .then(() => {
-                                  alert('Configuration imported successfully!');
+                                .then((response) => {
+                                  if (!response.ok) {
+                                    throw new Error('Failed to import project');
+                                  }
+                                  return response.json();
+                                })
+                                .then((result) => {
+                                  if (result?.config) {
+                                    setConfig(result.config);
+                                  }
+                                  alert('Project file loaded successfully!');
                                   window.location.reload();
                                 })
                                 .catch(err => {
-                                  console.error('Failed to save imported config:', err);
-                                  alert('Import successful but failed to save. Please save manually.');
+                                  console.error('Failed to save imported project:', err);
+                                  alert('Project loaded in memory but failed to save. Please try again.');
                                 });
                             }
                           } catch (err) {
-                            alert('Invalid JSON file. Please check the file and try again.');
-                            console.error('Import error:', err);
+                            alert('Invalid project file. Please check the file and try again.');
+                            console.error('Project import error:', err);
                           }
                         };
                         reader.readAsText(file);
@@ -5026,10 +5050,10 @@ const SettingsPage = () => {
             <div style={{ marginTop: '32px', padding: '16px', background: '#1a2a3a', borderRadius: '8px', borderLeft: '4px solid #4a90e2' }}>
               <h4 style={{ marginTop: 0, marginBottom: '8px' }}>⚠️ Important Notes</h4>
               <ul style={{ marginBottom: 0, paddingLeft: '20px', color: '#aaa' }}>
-                <li>The exported file contains ALL your settings: fixtures, looks, layouts, cue lists, and network configuration.</li>
-                <li>Importing will completely replace your current configuration.</li>
-                <li>It's recommended to export your configuration regularly as a backup.</li>
-                <li>Make sure to save any unsaved changes before importing.</li>
+                <li><code>.dmxd</code> project files include fixture profiles, fixtures, looks, cue lists, layouts, and network output settings.</li>
+                <li>Project files do not include connected clients, local passcodes, or Electron app preferences.</li>
+                <li>Opening a project file replaces the current project loaded in the app.</li>
+                <li>Use <strong>File &gt; Save</strong>, <strong>Save As</strong>, <strong>Open Project...</strong>, and <strong>Load Demo</strong> in the desktop app for the normal workflow.</li>
               </ul>
             </div>
           </div>

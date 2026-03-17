@@ -112,7 +112,7 @@ app.post('/api/config/active-layout', (req, res) => {
 // Export config
 app.get('/api/config/export', (req, res) => {
   res.setHeader('Content-Type', 'application/json');
-  res.setHeader('Content-Disposition', 'attachment; filename="dmx-config.json"');
+  res.setHeader('Content-Disposition', 'attachment; filename="DMX-Dashboard-Project.dmxd"');
   res.send(config.exportConfig());
 });
 
